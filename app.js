@@ -15,30 +15,15 @@ const server = http.createServer(app);
 const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] } }); // 创建 Socket.IO 实例
 const peerServer = PeerServer({ port: 9000, path: "/peerjs" }); // 配置 PeerJS 服务器
 
-let rooms = {}; // 存储房间信息：roomId -> { users: [{socketId, peerId, nickname}] }
+let rooms = {}; // 房间信息：roomId -> { users: [{socketId, peerId, nickname}], password }
 
-// 广播所有房间号
-function broadcastRoomList() {
-  io.emit("roomList", Object.keys(rooms));
+// 房间列表（携带是否有密码，供前端显示 🔒）
+function roomListPayload() {
+  return Object.entries(rooms).map(([id, r]) => ({ id, hasPassword: !!r.password }));
 }
-
-// 广播某个房间内的用户列表
-function broadcastRoomUpdate(roomId) {
-  if (rooms[roomId]) io.to(roomId).emit("roomUpdate", rooms[roomId].users);
-}
-
-// 房间为空时清理，避免残留幽灵房间
-function cleanupEmptyRoom(roomId) {
-  if (rooms[roomId] && rooms[roomId].users.length === 0) {
-    delete rooms[roomId];
-    broadcastRoomList();
-  }
-}
-
-// 向房间发送系统消息（加入/离开提示）
-function systemMessage(roomId, text) {
-  io.to(roomId).emit("systemMessage", { text, time: Date.now() });
-}
+function broadcastRoomList() { io.emit("roomList", roomListPayload()); }
+function broadcastRoomUpdate(roomId) { if (rooms[roomId]) io.to(roomId).emit("roomUpdate", rooms[roomId].users); }
+function systemMessage(roomId, text) { io.to(roomId).emit("systemMessage", { text, time: Date.now() }); }
 
 io.on("connection", (socket) => {
   const peerId = uuidv4(); // 为每个用户生成一个唯一的 PeerID
@@ -46,12 +31,14 @@ io.on("connection", (socket) => {
   socket.data.nickname = nickname; // 记录当前连接的昵称
   console.log(`用户连接：${socket.id}，PeerID=${peerId}，昵称=${nickname}`);
 
-  socket.emit("peerId", peerId); // 向客户端发送 PeerID
-  socket.emit("roomList", Object.keys(rooms)); // 发送当前所有房间号
+  socket.emit("peerId", peerId);
+  socket.emit("roomList", roomListPayload());
 
-  socket.on("createRoom", (roomId) => {
+  socket.on("createRoom", ({ roomId, password } = {}) => {
+    roomId = String(roomId || "").trim();
+    if (!roomId) return;
     if (!rooms[roomId]) {
-      rooms[roomId] = { users: [] };
+      rooms[roomId] = { users: [], password: password ? String(password) : null };
       rooms[roomId].users.push({ socketId: socket.id, peerId, nickname });
       socket.join(roomId);
       broadcastRoomList();
@@ -62,15 +49,18 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("joinRoom", (roomId) => {
-    if (rooms[roomId]) {
-      rooms[roomId].users.push({ socketId: socket.id, peerId, nickname });
-      socket.join(roomId);
-      systemMessage(roomId, `${nickname} 加入了房间`);
-      broadcastRoomUpdate(roomId);
-    } else {
-      socket.emit("theRoomNotExist", "房间不存在");
+  socket.on("joinRoom", ({ roomId, password } = {}) => {
+    roomId = String(roomId || "").trim();
+    const room = rooms[roomId];
+    if (!room) { socket.emit("theRoomNotExist", "房间不存在"); return; }
+    if (room.password && room.password !== String(password || "")) {
+      socket.emit("theRoomPasswordWrong", "房间密码错误");
+      return;
     }
+    room.users.push({ socketId: socket.id, peerId, nickname });
+    socket.join(roomId);
+    systemMessage(roomId, `${nickname} 加入了房间`);
+    broadcastRoomUpdate(roomId);
   });
 
   socket.on("leaveRoom", (roomId) => {
@@ -97,7 +87,15 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
+  // 举手：转发给房间内其他人
+  socket.on("raiseHand", ({ roomId, raised }) => {
+    if (rooms[roomId] && socket.rooms.has(roomId)) {
+      io.to(roomId).emit("raiseHand", { peerId, nickname: socket.data.nickname, raised: !!raised });
+    }
+  });
+
+  // 用 disconnecting 而非 disconnect：此时 socket 尚未退出房间，socket.rooms 仍可枚举
+  socket.on("disconnecting", () => {
     // 只遍历当前 socket 加入过的房间（socket.rooms 含自身私有房间 id，会被过滤掉）
     socket.rooms.forEach((roomId) => {
       if (rooms[roomId]) {
