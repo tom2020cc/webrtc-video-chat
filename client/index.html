@@ -101,6 +101,14 @@
             <label class="field checkbox"><input id="cfgSecure" type="checkbox"><span>使用 HTTPS（生产环境请勾选）</span></label>
             <label class="field checkbox"><input id="cfgSound" type="checkbox"><span>提示音（消息 / 加入 / 举手等）</span></label>
 
+            <div class="field-group">
+                <label class="field-label">通话行为</label>
+                <label class="field checkbox"><input id="cfgRequirePassword" type="checkbox"><span>创建房间时需要密码</span></label>
+                <label class="field" id="cfgDefaultPasswordField"><span>默认密码</span><input id="cfgDefaultPassword" type="text" placeholder="需要密码时自动填入"></label>
+                <label class="field checkbox"><input id="cfgCamOn" type="checkbox"><span>进入房间自动开启摄像头</span></label>
+                <label class="field checkbox"><input id="cfgMicOn" type="checkbox"><span>进入房间自动开启麦克风</span></label>
+            </div>
+
             <div class="modal-actions">
                 <button id="cfgSave" class="primary">保存并重启</button>
                 <button id="cfgCancel">取消</button>

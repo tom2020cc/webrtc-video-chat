@@ -1,14 +1,14 @@
 {
-  "name": "server",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "webrtc-video-chat",
+  "version": "1.1.0",
+  "description": "基于 Express + Socket.IO + PeerJS 的多人音视频通话与聊天室",
+  "main": "server/app.js",
   "scripts": {
-    "start": "node app.js",
+    "start": "node server/app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",

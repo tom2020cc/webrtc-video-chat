@@ -1,3 +1,4 @@
+const path = require("path");
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
@@ -7,9 +8,9 @@ const { v4: uuidv4 } = require("uuid"); // 用于生成唯一的 PeerID
 
 const app = express();
 app.use(cors()); // 配置 CORS，允许来自任意源的请求
-app.use(express.static("client"));
-app.get("/", (req, res) => { res.sendFile(__dirname + "/client/index.html") });
-app.get("/hi", (req, res) => { res.send("<h1>Hello Dear</h1>") });
+app.use(express.static(path.join(__dirname, "..", "client")));
+app.get("/", (req, res) => { res.sendFile(path.join(__dirname, "..", "client", "index.html")); });
+app.get("/hi", (req, res) => { res.send("<h1>Hello Dear</h1>"); });
 
 const server = http.createServer(app);
 const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] } }); // 创建 Socket.IO 实例
@@ -112,4 +113,4 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3000, () => { console.log("服务器启动，监听端口 3000") });
+server.listen(3000, () => { console.log("服务器启动，监听端口 3000"); });

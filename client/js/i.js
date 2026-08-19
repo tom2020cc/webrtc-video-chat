@@ -12,6 +12,10 @@ function loadConfig() {
   merged.path = merged.path || "/peerjs";
   if (merged.theme === undefined) merged.theme = "dark";
   if (merged.sound === undefined) merged.sound = true;
+  if (merged.requirePassword === undefined) merged.requirePassword = false;
+  if (merged.defaultPassword === undefined) merged.defaultPassword = "";
+  if (merged.camOn === undefined) merged.camOn = true;
+  if (merged.micOn === undefined) merged.micOn = true;
   if (!merged.nickname) {
     merged.nickname = "用户" + Math.floor(1000 + Math.random() * 9000);
     localStorage.setItem(CONFIG_KEY, JSON.stringify(merged));
@@ -57,6 +61,11 @@ const cfgPeerHost = document.getElementById("cfgPeerHost");
 const cfgPeerPort = document.getElementById("cfgPeerPort");
 const cfgSecure = document.getElementById("cfgSecure");
 const cfgSound = document.getElementById("cfgSound");
+const cfgRequirePassword = document.getElementById("cfgRequirePassword");
+const cfgDefaultPassword = document.getElementById("cfgDefaultPassword");
+const cfgDefaultPasswordField = document.getElementById("cfgDefaultPasswordField");
+const cfgCamOn = document.getElementById("cfgCamOn");
+const cfgMicOn = document.getElementById("cfgMicOn");
 const cfgSave = document.getElementById("cfgSave");
 const cfgCancel = document.getElementById("cfgCancel");
 const cfgClose = document.getElementById("cfgClose");
@@ -285,6 +294,15 @@ function removePlaceholder() {
 async function initLocalStream() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    if (config.micOn === false && localStream.getAudioTracks()[0]) {
+      localStream.getAudioTracks()[0].enabled = false;
+      isMuted = true;
+    }
+    if (config.camOn === false && localStream.getVideoTracks()[0]) {
+      localStream.getVideoTracks()[0].enabled = false;
+      isCameraOff = true;
+    }
+    syncControlButtons();
     displayLocalVideo(localStream);
   } catch (err) {
     console.error("获取媒体流失败：", err);
@@ -465,7 +483,11 @@ function resetRoomUI() {
 createRoomBtn.addEventListener("click", async () => {
   const roomId = roomIdInput.value.trim();
   if (!roomId) { alert("房间号不能为空"); return; }
-  const password = roomPasswordInput.value.trim();
+  let password = roomPasswordInput.value.trim();
+  if (config.requirePassword) {
+    if (!password) password = config.defaultPassword || "";
+    if (!password) { alert("请在设置中填写默认密码，或在此输入房间密码"); return; }
+  }
   if (!localStream) await initLocalStream();
   socket.emit("createRoom", { roomId, password });
   currentRoomId = roomId;
@@ -508,8 +530,7 @@ function stopLocalStream() {
   screenBtn.classList.remove("on");
   screenBtn.querySelector(".txt").textContent = "共享屏幕";
   isMuted = false; isCameraOff = false;
-  muteBtn.classList.remove("on"); muteBtn.querySelector(".ico").textContent = "🎙️"; muteBtn.querySelector(".txt").textContent = "静音";
-  cameraBtn.classList.remove("on"); cameraBtn.querySelector(".ico").textContent = "📷"; cameraBtn.querySelector(".txt").textContent = "关摄像头";
+  syncControlButtons();
 }
 
 function resetVideoContainer() {
@@ -532,15 +553,22 @@ function openJoinModal(roomId) {
 function closeJoinModal() { joinModal.classList.add("hidden"); pendingJoinRoom = null; }
 
 /* ============ 通话控制 ============ */
+function syncControlButtons() {
+  muteBtn.classList.toggle("on", isMuted);
+  muteBtn.querySelector(".ico").textContent = isMuted ? "🔇" : "🎙️";
+  muteBtn.querySelector(".txt").textContent = isMuted ? "取消静音" : "静音";
+  cameraBtn.classList.toggle("on", isCameraOff);
+  cameraBtn.querySelector(".ico").textContent = isCameraOff ? "🚫" : "📷";
+  cameraBtn.querySelector(".txt").textContent = isCameraOff ? "打开摄像头" : "关摄像头";
+}
+
 function toggleMute() {
   if (!localStream) return;
   const track = localStream.getAudioTracks()[0];
   if (!track) return;
   track.enabled = !track.enabled;
   isMuted = !track.enabled;
-  muteBtn.classList.toggle("on", isMuted);
-  muteBtn.querySelector(".ico").textContent = isMuted ? "🔇" : "🎙️";
-  muteBtn.querySelector(".txt").textContent = isMuted ? "取消静音" : "静音";
+  syncControlButtons();
 }
 
 function toggleCamera() {
@@ -549,9 +577,7 @@ function toggleCamera() {
   if (!track) return;
   track.enabled = !track.enabled;
   isCameraOff = !track.enabled;
-  cameraBtn.classList.toggle("on", isCameraOff);
-  cameraBtn.querySelector(".ico").textContent = isCameraOff ? "🚫" : "📷";
-  cameraBtn.querySelector(".txt").textContent = isCameraOff ? "打开摄像头" : "关摄像头";
+  syncControlButtons();
 }
 
 function replaceVideoTrackOn(call, track) {
@@ -642,6 +668,11 @@ function openSettings() {
   cfgPeerPort.value = config.peerPort;
   cfgSecure.checked = config.secure;
   cfgSound.checked = config.sound;
+  cfgRequirePassword.checked = !!config.requirePassword;
+  cfgDefaultPassword.value = config.defaultPassword || "";
+  cfgCamOn.checked = config.camOn !== false;
+  cfgMicOn.checked = config.micOn !== false;
+  syncPasswordField();
   updatePresetActive();
   settingsModal.classList.remove("hidden");
 }
@@ -649,6 +680,11 @@ function closeSettings() { settingsModal.classList.add("hidden"); }
 function updatePresetActive() {
   presetLocal.classList.toggle("active", config.env === "local");
   presetProd.classList.toggle("active", config.env === "prod");
+}
+function syncPasswordField() {
+  const on = cfgRequirePassword.checked;
+  cfgDefaultPassword.disabled = !on;
+  cfgDefaultPasswordField.style.opacity = on ? "1" : "0.5";
 }
 function applyPreset(env) {
   const p = PRESETS[env];
@@ -688,6 +724,7 @@ cfgClose.addEventListener("click", closeSettings);
 cfgCancel.addEventListener("click", closeSettings);
 presetLocal.addEventListener("click", () => applyPreset("local"));
 presetProd.addEventListener("click", () => applyPreset("prod"));
+cfgRequirePassword.addEventListener("change", syncPasswordField);
 
 cfgSave.addEventListener("click", () => {
   config.nickname = cfgNickname.value.trim() || "匿名用户";
@@ -696,6 +733,10 @@ cfgSave.addEventListener("click", () => {
   config.peerPort = cfgPeerPort.value.trim();
   config.secure = cfgSecure.checked;
   config.sound = cfgSound.checked;
+  config.requirePassword = cfgRequirePassword.checked;
+  config.defaultPassword = cfgDefaultPassword.value.trim();
+  config.camOn = cfgCamOn.checked;
+  config.micOn = cfgMicOn.checked;
   config.env = /localhost|127\.0\.0\.1/.test(config.peerHost + config.serverUrl) ? "local" : "prod";
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
   location.reload();
