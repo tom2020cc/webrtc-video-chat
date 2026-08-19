@@ -1,0 +1,7 @@
+node_modules/
+.idea/
+.claude/
+*.log
+.DS_Store
+ScreenShot_*.png
+新建文本文档.txt
