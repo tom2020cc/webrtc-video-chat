@@ -5,6 +5,74 @@ const PRESETS = {
   prod:  { env: "prod",  serverUrl: "https://www.howfq.icu", peerHost: "www.howfq.icu", peerPort: "", secure: true, path: "/peerjs", nickname: "" },
 };
 
+/* ============ 设备信息收集（增强版） ============ */
+function getClientInfo() {
+  // 获取Canvas指纹
+  function getCanvasFingerprint() {
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const txt = 'BrowserFingerprint,123!';
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#f60';
+      ctx.fillRect(125, 1, 62, 20);
+      ctx.fillStyle = '#069';
+      ctx.fillText(txt, 2, 15);
+      ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+      ctx.fillText(txt, 4, 17);
+      return canvas.toDataURL().substring(0, 100); // 只取前100个字符
+    } catch (e) {
+      return 'canvas-not-supported';
+    }
+  }
+
+  // 获取WebGL指纹
+  function getWebGLFingerprint() {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      if (!gl) return 'webgl-not-supported';
+
+      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'unknown';
+      const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'unknown';
+
+      return `${vendor}|${renderer}`;
+    } catch (e) {
+      return 'webgl-error';
+    }
+  }
+
+  // 获取浏览器唯一ID（如果有）
+  function getBrowserId() {
+    let browserId = localStorage.getItem('browserId');
+    if (!browserId) {
+      // 生成新的浏览器ID
+      browserId = 'bid_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('browserId', browserId);
+    }
+    return browserId;
+  }
+
+  return {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    screenResolution: `${screen.width}x${screen.height}`,
+    colorDepth: screen.colorDepth,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    canvasFingerprint: getCanvasFingerprint(),
+    webglFingerprint: getWebGLFingerprint(),
+    hardwareConcurrency: navigator.hardwareConcurrency || 'unknown',
+    deviceMemory: navigator.deviceMemory || 'unknown',
+    browserId: getBrowserId(),
+    cookieEnabled: navigator.cookieEnabled,
+    doNotTrack: navigator.doNotTrack || 'unset'
+  };
+}
+
 function loadConfig() {
   let cfg = {};
   try { cfg = JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch (e) { cfg = {}; }
@@ -27,6 +95,8 @@ const config = loadConfig();
 /* ============ DOM 引用 ============ */
 const userNicknameDisplay = document.getElementById("userNickname");
 const userPeerIdDisplay = document.getElementById("userPeerId");
+const deviceIdDisplay = document.getElementById("deviceId");
+const locationInfoDisplay = document.getElementById("locationInfo");
 const currentRoomIdDisplay = document.getElementById("currentRoomId");
 const videoContainer = document.getElementById("videoContainer");
 const roomControls = document.getElementById("roomControls");
@@ -50,6 +120,12 @@ const raiseHandBtn = document.getElementById("raiseHandBtn");
 const snapshotBtn = document.getElementById("snapshotBtn");
 const copyRoomBtn = document.getElementById("copyRoomBtn");
 const hangupBtn = document.getElementById("hangupBtn");
+const fileBtn = document.getElementById("fileBtn");
+const fileInput = document.getElementById("fileInput");
+const fileTransferArea = document.getElementById("fileTransferArea");
+const closeFileArea = document.getElementById("closeFileArea");
+const fileList = document.getElementById("fileList");
+const clearChatBtn = document.getElementById("clearChatBtn");
 const callTimerPill = document.getElementById("callTimerPill");
 const callTimer = document.getElementById("callTimer");
 const themeBtn = document.getElementById("themeBtn");
@@ -97,6 +173,7 @@ const memberNames = new Map();  // peerId -> nickname
 const raisedHands = new Set();  // 举手的 peerId 集合
 let audioCtx = null;
 const analysers = new Map();    // key -> {source, analyser}
+let fileTransfers = new Map();  // transferId -> {name, size, from, progress, status}
 let callStartTime = null;
 let timerInterval = null;
 
@@ -208,7 +285,12 @@ themeBtn.addEventListener("click", () => {
 });
 
 /* ============ Socket 初始化 ============ */
-socket = io(config.serverUrl, { auth: { nickname: config.nickname } });
+socket = io(config.serverUrl, {
+  auth: {
+    nickname: config.nickname,
+    ...getClientInfo()
+  }
+});
 userNicknameDisplay.textContent = config.nickname;
 
 socket.on("connect_error", () => {
@@ -220,6 +302,84 @@ socket.on("peerId", (peerId) => {
   userPeerIdDisplay.textContent = peerId;
   initializePeer();
   initLocalStream();
+});
+
+// 用户信息响应（可能包含服务器端恢复的昵称）
+socket.on("userInfo", ({ nickname, deviceFingerprint }) => {
+  if (nickname && nickname !== config.nickname) {
+    config.nickname = nickname;
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+    userNicknameDisplay.textContent = nickname;
+    showNotice(`欢迎回来，${nickname}！`);
+  }
+
+  // 存储设备指纹
+  if (deviceFingerprint) {
+    window.currentDeviceFingerprint = deviceFingerprint;
+  }
+
+  // 获取设备信息
+  socket.emit("getDeviceInfo");
+});
+
+// 设备信息响应
+socket.on("deviceInfo", (deviceInfo) => {
+  console.log("设备信息：", deviceInfo);
+
+  // 显示设备ID（简化显示，只显示前8位）
+  if (deviceInfo.fingerprint) {
+    const shortId = deviceInfo.fingerprint.substring(0, 8) + "...";
+    deviceIdDisplay.textContent = shortId;
+    deviceIdDisplay.title = `完整设备ID: ${deviceInfo.fingerprint}\n浏览器ID: ${deviceInfo.browserId}\n连接时间: ${deviceInfo.connectionTime}`;
+  }
+
+  // 显示地理位置信息
+  if (deviceInfo.location) {
+    const loc = deviceInfo.location;
+    const locationText = `${loc.countryEmoji} ${loc.city}, ${loc.region}`;
+    locationInfoDisplay.textContent = locationText;
+    locationInfoDisplay.title = `IP: ${deviceInfo.ip || "未知"}\n国家: ${loc.country}\n地区: ${loc.region}\n城市: ${loc.city}\nISP: ${loc.isp}\n时区: ${loc.timezone}`;
+
+    // 如果IP变化了，提示用户
+    if (config.lastIp && config.lastIp !== deviceInfo.ip) {
+      showNotice(`检测到IP地址变化: ${config.lastIp} -> ${deviceInfo.ip}`);
+    }
+    config.lastIp = deviceInfo.ip;
+  }
+
+  // 保存设备信息到配置
+  config.deviceInfo = deviceInfo;
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+});
+
+// 错误处理
+socket.on("error", ({ message }) => {
+  console.error("服务器错误：", message);
+  showNotice(`错误：${message}`);
+});
+
+// 聊天历史
+socket.on("chatHistory", ({ roomId, messages }) => {
+  if (roomId === currentRoomId && messages && messages.length > 0) {
+    messages.forEach(msg => {
+      appendMessage(msg.from, msg.text, msg.time, false);
+    });
+    showNotice(`已加载 ${messages.length} 条历史消息`);
+  }
+});
+
+// 聊天历史清空通知
+socket.on("chatHistoryCleared", () => {
+  chatMessages.innerHTML = "";
+  showNotice("聊天记录已清空");
+});
+
+// 昵称更新确认
+socket.on("nicknameUpdated", ({ nickname }) => {
+  config.nickname = nickname;
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  userNicknameDisplay.textContent = nickname;
+  showNotice("昵称已更新");
 });
 
 socket.on("theRoomExist", (msg) => { alert(msg); resetRoomUI(); });
@@ -253,13 +413,26 @@ socket.on("roomUpdate", (users) => {
   updateVideoPeers(users);
 });
 
-socket.on("chatMessage", ({ from, text, time }) => {
-  appendMessage(from, text, time, false);
+socket.on("chatMessage", ({ from, text, time, id, replyTo, forwardFrom, type }) => {
+  appendMessage(from, text, time, false, id, replyTo, forwardFrom, type);
   if (from !== config.nickname) playTone(880, 0.08, "sine", 0.07);
 });
 socket.on("systemMessage", ({ text, time }) => {
   appendMessage(null, text, time, true);
   playTone(520, 0.12, "sine", 0.07);
+});
+socket.on("message-deleted", ({ messageId }) => {
+  removeMessageFromUI(messageId);
+  showNotice("消息已被删除");
+});
+socket.on("message-edited", ({ messageId, newText, editTime }) => {
+  updateMessageInUI(messageId, newText, editTime);
+});
+socket.on("whatsapp-info-shared", (shareData) => {
+  const shareMessage = `${shareData.from} 分享了WhatsApp信息: ${shareData.whatsappDisplayName} - ${shareData.whatsappNumber}`;
+  appendMessage("System", shareMessage, shareData.time, true);
+  showNotice(`收到 ${shareData.from} 的WhatsApp信息`);
+  playTone(660, 0.15, "sine", 0.1);
 });
 socket.on("raiseHand", ({ peerId, nickname, raised }) => {
   if (raised) { raisedHands.add(peerId); showNotice(`${nickname} 举手了 ✋`); playTone(660, 0.18, "sine", 0.1); }
@@ -437,7 +610,7 @@ function formatTime(ts) {
   return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
-function appendMessage(from, text, time, isSystem) {
+function appendMessage(from, text, time, isSystem, messageId = null, replyTo = null, forwardFrom = null, type = 'text') {
   const wrap = document.createElement("div");
   if (isSystem) {
     wrap.className = "msg system";
@@ -447,17 +620,124 @@ function appendMessage(from, text, time, isSystem) {
     wrap.appendChild(bubble);
   } else {
     wrap.className = "msg" + (from === config.nickname ? " mine" : "");
+    if (messageId) wrap.dataset.messageId = messageId;
+    if (from === config.nickname) wrap.dataset.isOwnMessage = "true";
+
     const meta = document.createElement("div");
     meta.className = "meta-line";
-    meta.textContent = `${from} · ${formatTime(time)}`;
+
+    // 添加消息类型标识
+    let typeIndicator = '';
+    if (type === 'forward') typeIndicator = '↪️ ';
+    if (type === 'whatsapp_share') typeIndicator = '📱 ';
+
+    meta.textContent = `${typeIndicator}${from} · ${formatTime(time)}`;
+
+    // 添加消息操作按钮（仅对自己的消息显示）
+    if (from === config.nickname && messageId) {
+      const actionsBtn = document.createElement("span");
+      actionsBtn.className = "msg-actions";
+      actionsBtn.innerHTML = `
+        <button class="action-btn" data-action="reply" title="回复">↩️</button>
+        <button class="action-btn" data-action="delete" title="删除">🗑️</button>
+      `;
+      meta.appendChild(actionsBtn);
+
+      // 添加事件监听
+      actionsBtn.addEventListener('click', (e) => {
+        if (e.target.dataset.action === 'delete') {
+          deleteMessage(messageId);
+        } else if (e.target.dataset.action === 'reply') {
+          startReply(messageId, text, from);
+        }
+      });
+    }
+
+    wrap.appendChild(meta);
+
+    // 显示回复信息
+    if (replyTo) {
+      const replyEl = document.createElement("div");
+      replyEl.className = "reply-context";
+      replyEl.innerHTML = `
+        <span class="reply-label">↩️ 回复 ${replyTo.from}:</span>
+        <span class="reply-text">${replyTo.text}</span>
+      `;
+      wrap.appendChild(replyEl);
+    }
+
+    // 显示转发信息
+    if (forwardFrom) {
+      const forwardEl = document.createElement("div");
+      forwardEl.className = "forward-context";
+      forwardEl.innerHTML = `
+        <span class="forward-label">↪️ 转发自 ${forwardFrom.originalFrom} 在房间 ${forwardFrom.originalRoom}:</span>
+        <span class="forward-text">${forwardFrom.originalText}</span>
+      `;
+      wrap.appendChild(forwardEl);
+    }
+
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.textContent = text;
-    wrap.appendChild(meta);
+
+    if (forwardFrom) {
+      bubble.classList.add('forwarded');
+    }
+
     wrap.appendChild(bubble);
   }
   chatMessages.appendChild(wrap);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// 删除消息
+function deleteMessage(messageId) {
+  if (!currentRoomId) return;
+
+  if (confirm('确定要删除这条消息吗？')) {
+    socket.emit('deleteMessage', {
+      roomId: currentRoomId,
+      messageId: messageId
+    });
+  }
+}
+
+// 开始回复消息
+function startReply(messageId, text, from) {
+  const chatInput = document.getElementById('chatInput');
+  chatInput.focus();
+  chatInput.dataset.replyingTo = messageId;
+  chatInput.dataset.originalText = text;
+  chatInput.dataset.originalFrom = from;
+  chatInput.placeholder = `回复 ${from}: ${text.substring(0, 30)}...`;
+}
+
+// 从UI中移除消息
+function removeMessageFromUI(messageId) {
+  const messageEl = chatMessages.querySelector(`[data-message-id="${messageId}"]`);
+  if (messageEl) {
+    messageEl.remove();
+  }
+}
+
+// 更新UI中的消息
+function updateMessageInUI(messageId, newText, editTime) {
+  const messageEl = chatMessages.querySelector(`[data-message-id="${messageId}"]`);
+  if (messageEl) {
+    const bubble = messageEl.querySelector('.bubble');
+    if (bubble) {
+      bubble.textContent = newText;
+      bubble.classList.add('edited');
+
+      // 更新时间显示
+      const metaLine = messageEl.querySelector('.meta-line');
+      if (metaLine) {
+        const timeText = metaLine.childNodes[0].textContent;
+        metaLine.childNodes[0].textContent = timeText + ' (已编辑)';
+      }
+    }
+  }
 }
 
 /* ============ 房间逻辑 ============ */
@@ -520,6 +800,11 @@ function leaveRoom() {
   currentUsers = [];
   renderMembers();
   analysers.clear();
+
+  // 清理文件传输
+  fileTransfers.clear();
+  hideFileTransferArea();
+
   setRoomState(false);
 }
 
@@ -660,7 +945,263 @@ function buildEmojiPanel() {
 }
 buildEmojiPanel();
 
-/* ============ 设置面板 ============ */
+/* ============ 文件传输功能 ============ */
+function formatFileSize(bytes) {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+function getFileIcon(filename) {
+  const ext = filename.split(".").pop().toLowerCase();
+  const iconMap = {
+    "pdf": "📄", "doc": "📝", "docx": "📝", "txt": "📃",
+    "jpg": "🖼️", "jpeg": "🖼️", "png": "🖼️", "gif": "🖼️",
+    "mp4": "🎬", "avi": "🎬", "mov": "🎬",
+    "mp3": "🎵", "wav": "🎵", "flac": "🎵",
+    "zip": "📦", "rar": "📦", "7z": "📦",
+    "js": "📜", "html": "🌐", "css": "🎨"
+  };
+  return iconMap[ext] || "📄";
+}
+
+function renderFileItem(transfer) {
+  const div = document.createElement("div");
+  div.className = "file-item";
+  div.id = `file-${transfer.id}`;
+
+  const icon = document.createElement("span");
+  icon.className = "file-icon";
+  icon.textContent = getFileIcon(transfer.name);
+
+  const info = document.createElement("div");
+  info.className = "file-info";
+
+  const name = document.createElement("div");
+  name.className = "file-name";
+  name.textContent = transfer.name;
+
+  const meta = document.createElement("div");
+  meta.className = "file-meta";
+  meta.textContent = `${transfer.from || "未知"} · ${formatFileSize(transfer.size)}`;
+
+  info.appendChild(name);
+  info.appendChild(meta);
+
+  if (transfer.status === "transferring") {
+    const progress = document.createElement("div");
+    progress.className = "file-progress";
+    const bar = document.createElement("div");
+    bar.className = "file-progress-bar";
+    bar.style.width = `${transfer.progress || 0}%`;
+    progress.appendChild(bar);
+    info.appendChild(progress);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "file-actions";
+
+  if (transfer.status === "incoming") {
+    const acceptBtn = document.createElement("button");
+    acceptBtn.className = "file-action-btn primary";
+    acceptBtn.textContent = "接收";
+    acceptBtn.onclick = () => acceptFile(transfer.id);
+
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "file-action-btn";
+    rejectBtn.textContent = "拒绝";
+    rejectBtn.onclick = () => rejectFile(transfer.id);
+
+    actions.appendChild(acceptBtn);
+    actions.appendChild(rejectBtn);
+  } else if (transfer.status === "outgoing") {
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "file-action-btn";
+    statusSpan.textContent = "发送中...";
+    statusSpan.disabled = true;
+    actions.appendChild(statusSpan);
+  } else if (transfer.status === "completed") {
+    const doneBtn = document.createElement("button");
+    doneBtn.className = "file-action-btn";
+    doneBtn.textContent = "已完成";
+    doneBtn.disabled = true;
+    actions.appendChild(doneBtn);
+  }
+
+  div.appendChild(icon);
+  div.appendChild(info);
+  div.appendChild(actions);
+
+  return div;
+}
+
+function updateFileTransferUI() {
+  fileList.innerHTML = "";
+  if (fileTransfers.size === 0) {
+    fileList.innerHTML = '<div class="empty-files">暂无文件传输</div>';
+    return;
+  }
+
+  fileTransfers.forEach((transfer) => {
+    fileList.appendChild(renderFileItem(transfer));
+  });
+}
+
+function showFileTransferArea() {
+  fileTransferArea.classList.remove("hidden");
+}
+
+function hideFileTransferArea() {
+  fileTransferArea.classList.add("hidden");
+}
+
+// 文件发送
+function sendFile(file) {
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+
+  const transferId = `transfer-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // 通知其他用户有文件要发送
+  socket.emit("fileSignal", {
+    roomId: currentRoomId,
+    signal: "offer",
+    data: {
+      id: transferId,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      from: config.nickname
+    }
+  });
+
+  // 添加到传输列表
+  fileTransfers.set(transferId, {
+    id: transferId,
+    name: file.name,
+    size: file.size,
+    from: config.nickname,
+    status: "outgoing",
+    progress: 0
+  });
+
+  updateFileTransferUI();
+  showFileTransferArea();
+
+  // 模拟文件传输进度（实际应用中需要使用WebRTC数据通道）
+  let progress = 0;
+  const interval = setInterval(() => {
+    progress += Math.random() * 10;
+    if (progress >= 100) {
+      progress = 100;
+      clearInterval(interval);
+
+      const transfer = fileTransfers.get(transferId);
+      if (transfer) {
+        transfer.status = "completed";
+        transfer.progress = 100;
+        updateFileTransferUI();
+        showNotice("文件发送完成");
+      }
+    } else {
+      const transfer = fileTransfers.get(transferId);
+      if (transfer) {
+        transfer.progress = progress;
+        updateFileTransferUI();
+      }
+
+      // 通知进度更新
+      socket.emit("fileProgress", {
+        roomId: currentRoomId,
+        transferId,
+        progress
+      });
+    }
+  }, 500);
+}
+
+// 文件接收
+function acceptFile(transferId) {
+  const transfer = fileTransfers.get(transferId);
+  if (!transfer) return;
+
+  transfer.status = "transferring";
+  transfer.progress = 0;
+  updateFileTransferUI();
+
+  // 模拟接收进度
+  let progress = 0;
+  const interval = setInterval(() => {
+    progress += Math.random() * 15;
+    if (progress >= 100) {
+      progress = 100;
+      clearInterval(interval);
+
+      transfer.status = "completed";
+      transfer.progress = 100;
+      updateFileTransferUI();
+      showNotice("文件接收完成");
+    } else {
+      transfer.progress = progress;
+      updateFileTransferUI();
+    }
+  }, 300);
+}
+
+function rejectFile(transferId) {
+  const transfer = fileTransfers.get(transferId);
+  if (!transfer) return;
+
+  fileTransfers.delete(transferId);
+  updateFileTransferUI();
+
+  if (fileTransfers.size === 0) {
+    hideFileTransferArea();
+  }
+
+  showNotice("已拒绝文件接收");
+}
+
+// 处理文件信号
+socket.on("fileSignal", ({ from, peerId, signal, data }) => {
+  if (signal === "offer") {
+    const transferId = data.id;
+
+    // 避免重复添加
+    if (fileTransfers.has(transferId)) return;
+
+    fileTransfers.set(transferId, {
+      id: transferId,
+      name: data.name,
+      size: data.size,
+      from: from || data.from,
+      status: "incoming",
+      progress: 0
+    });
+
+    updateFileTransferUI();
+    showFileTransferArea();
+    showNotice(`${from || data.from} 想要发送文件：${data.name}`);
+
+    playTone(440, 0.1, "sine", 0.08);
+  }
+});
+
+// 处理文件传输进度
+socket.on("fileProgress", ({ fromPeerId, transferId, progress }) => {
+  const transfer = fileTransfers.get(transferId);
+  if (transfer) {
+    transfer.progress = progress;
+    if (progress >= 100) {
+      transfer.status = "completed";
+    }
+    updateFileTransferUI();
+  }
+});
 function openSettings() {
   cfgNickname.value = config.nickname;
   cfgServerUrl.value = config.serverUrl;
@@ -696,6 +1237,30 @@ function applyPreset(env) {
   updatePresetActive();
 }
 
+/* ============ 聊天记录管理 ============ */
+function clearChatHistory() {
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+
+  if (confirm("确定要清空聊天记录吗？此操作无法撤销。")) {
+    socket.emit("clearChatHistory", { roomId: currentRoomId });
+    chatMessages.innerHTML = "";
+    showNotice("聊天记录已清空");
+  }
+}
+
+/* ============ 昵称更新功能 ============ */
+function updateNickname(newNickname) {
+  if (!newNickname || !newNickname.trim()) {
+    showNotice("昵称不能为空");
+    return;
+  }
+
+  socket.emit("updateNickname", { nickname: newNickname.trim() });
+}
+
 /* ============ 事件绑定 ============ */
 muteBtn.addEventListener("click", toggleMute);
 cameraBtn.addEventListener("click", toggleCamera);
@@ -710,6 +1275,218 @@ raiseHandBtn.addEventListener("click", () => {
 snapshotBtn.addEventListener("click", captureSnapshot);
 copyRoomBtn.addEventListener("click", copyRoomId);
 emojiBtn.addEventListener("click", () => emojiPanel.classList.toggle("hidden"));
+
+// 文件传输事件
+fileBtn.addEventListener("click", () => {
+  fileInput.click();
+});
+
+// 图片按钮和图片处理
+const imageBtn = document.getElementById("imageBtn");
+const imageInput = document.getElementById("imageInput");
+const imagePreviewModal = document.getElementById("imagePreviewModal");
+const previewImage = document.getElementById("previewImage");
+const closeImagePreview = document.getElementById("closeImagePreview");
+
+imageBtn.addEventListener("click", () => {
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+  imageInput.click();
+});
+
+imageInput.addEventListener("change", (e) => {
+  const files = e.target.files;
+  if (files && files.length > 0) {
+    Array.from(files).forEach(file => {
+      if (file.type.startsWith('image/')) {
+        sendImage(file);
+      } else {
+        showNotice("请选择图片文件");
+      }
+    });
+    imageInput.value = ""; // 重置文件输入
+  }
+});
+
+// 发送图片功能
+function sendImage(file) {
+  // 检查文件大小（1MB限制）
+  const maxSize = 1 * 1024 * 1024; // 1MB
+  if (file.size > maxSize) {
+    showNotice("图片大小不能超过1MB");
+    return;
+  }
+
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const imageData = e.target.result;
+
+    // 创建图片消息对象
+    const imageMessage = {
+      type: 'image',
+      from: config.nickname,
+      deviceFingerprint: currentDeviceFingerprint,
+      imageData: imageData,
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      time: Date.now(),
+      id: Date.now() + Math.random()
+    };
+
+    // 通过DataChannel发送图片（如果有Peer连接）
+    sendImageToPeers(imageMessage);
+
+    // 也在本地显示
+    displayImageMessage(imageMessage);
+
+    // 通知服务器
+    socket.emit('image-message', {
+      roomId: currentRoomId,
+      imageInfo: {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        time: Date.now()
+      }
+    });
+
+    showNotice("图片发送成功");
+  };
+
+  reader.onerror = () => {
+    showNotice("图片读取失败");
+  };
+
+  reader.readAsDataURL(file);
+}
+
+// 通过DataChannel发送图片给Peers
+function sendImageToPeers(imageMessage) {
+  // 这里可以通过WebRTC DataChannel发送图片
+  // 目前简化处理，主要通过socket.io信号传输
+  Object.values(peerConnections).forEach(conn => {
+    if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
+      try {
+        // 将imageData转换为字符串传输
+        const dataStr = JSON.stringify({
+          type: 'image',
+          data: imageMessage
+        });
+        conn.dataChannel.send(dataStr);
+      } catch (e) {
+        console.error("发送图片失败:", e);
+      }
+    }
+  });
+}
+
+// 显示图片消息
+function displayImageMessage(message) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg" + (message.from === config.nickname ? " mine" : "") + " image";
+  wrap.dataset.messageId = message.id || message.time;
+
+  const meta = document.createElement("div");
+  meta.className = "meta-line";
+  meta.textContent = `${message.from} · ${formatTime(message.time)}`;
+
+  const imageContainer = document.createElement("div");
+  imageContainer.className = "image-container";
+
+  const img = document.createElement("img");
+  img.src = message.imageData;
+  img.alt = message.fileName || "图片";
+
+  // 点击图片预览
+  img.addEventListener('click', () => {
+    openImagePreview(message.imageData);
+  });
+
+  const imageInfo = document.createElement("div");
+  imageInfo.className = "image-info";
+
+  const sizeText = formatFileSize(message.fileSize);
+  imageInfo.innerHTML = `
+    <span>${message.fileName || "image"} (${sizeText})</span>
+    <div class="image-actions">
+      <button class="image-action-btn" data-action="download" data-url="${message.imageData}" data-name="${message.fileName || "image"}">⬇️ 下载</button>
+    </div>
+  `;
+
+  // 下载按钮功能
+  const downloadBtn = imageInfo.querySelector('.image-action-btn');
+  downloadBtn.addEventListener('click', () => {
+    downloadImage(message.imageData, message.fileName || "image");
+  });
+
+  imageContainer.appendChild(img);
+  imageContainer.appendChild(imageInfo);
+
+  wrap.appendChild(meta);
+  wrap.appendChild(imageContainer);
+
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// 打开图片预览
+function openImagePreview(imageUrl) {
+  previewImage.src = imageUrl;
+  imagePreviewModal.classList.add('active');
+}
+
+// 关闭图片预览
+closeImagePreview.addEventListener('click', () => {
+  imagePreviewModal.classList.remove('active');
+});
+
+// 点击模态框背景关闭预览
+imagePreviewModal.addEventListener('click', (e) => {
+  if (e.target === imagePreviewModal) {
+    imagePreviewModal.classList.remove('active');
+  }
+});
+
+// 下载图片
+function downloadImage(imageUrl, fileName) {
+  const link = document.createElement('a');
+  link.href = imageUrl;
+  link.download = fileName || 'image';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showNotice("开始下载图片");
+}
+
+// 格式化文件大小
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+fileInput.addEventListener("change", (e) => {
+  const files = e.target.files;
+  if (files && files.length > 0) {
+    Array.from(files).forEach(file => sendFile(file));
+    fileInput.value = ""; // 重置文件输入
+  }
+});
+
+closeFileArea.addEventListener("click", hideFileTransferArea);
+
+// 清空聊天记录
+clearChatBtn.addEventListener("click", clearChatHistory);
 joinConfirm.addEventListener("click", () => {
   if (!pendingJoinRoom) return;
   const roomId = pendingJoinRoom;
@@ -727,7 +1504,10 @@ presetProd.addEventListener("click", () => applyPreset("prod"));
 cfgRequirePassword.addEventListener("change", syncPasswordField);
 
 cfgSave.addEventListener("click", () => {
-  config.nickname = cfgNickname.value.trim() || "匿名用户";
+  const newNickname = cfgNickname.value.trim() || "匿名用户";
+  const nicknameChanged = newNickname !== config.nickname;
+
+  config.nickname = newNickname;
   config.serverUrl = cfgServerUrl.value.trim();
   config.peerHost = cfgPeerHost.value.trim();
   config.peerPort = cfgPeerPort.value.trim();
@@ -739,7 +1519,14 @@ cfgSave.addEventListener("click", () => {
   config.micOn = cfgMicOn.checked;
   config.env = /localhost|127\.0\.0\.1/.test(config.peerHost + config.serverUrl) ? "local" : "prod";
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-  location.reload();
+
+  // 如果昵称改变且在房间内，通知服务器
+  if (nicknameChanged && currentRoomId) {
+    updateNickname(newNickname);
+  }
+
+  closeSettings();
+  showNotice("设置已保存");
 });
 
 chatForm.addEventListener("submit", (e) => {
@@ -747,7 +1534,35 @@ chatForm.addEventListener("submit", (e) => {
   const text = chatInput.value.trim();
   if (!text) return;
   if (!currentRoomId) { showNotice("请先加入房间"); return; }
-  socket.emit("chatMessage", { roomId: currentRoomId, text });
+
+  // 检查是否是回复消息
+  const replyToId = chatInput.dataset.replyingTo;
+  const originalText = chatInput.dataset.originalText;
+  const originalFrom = chatInput.dataset.originalFrom;
+
+  if (replyToId) {
+    // 发送回复消息
+    socket.emit("chatMessage", {
+      roomId: currentRoomId,
+      text,
+      replyTo: {
+        id: replyToId,
+        from: originalFrom,
+        text: originalText,
+        time: Date.now()
+      }
+    });
+
+    // 清除回复状态
+    delete chatInput.dataset.replyingTo;
+    delete chatInput.dataset.originalText;
+    delete chatInput.dataset.originalFrom;
+    chatInput.placeholder = "说点什么…(回车发送)";
+  } else {
+    // 发送普通消息
+    socket.emit("chatMessage", { roomId: currentRoomId, text });
+  }
+
   chatInput.value = "";
 });
 
@@ -760,6 +1575,7 @@ window.addEventListener("keydown", (e) => {
     case "v": toggleCamera(); break;
     case "s": isSharing ? stopScreenShare() : startScreenShare(); break;
     case "r": if (currentRoomId) raiseHandBtn.click(); break;
+    case "i": if (currentRoomId) imageBtn.click(); break; // 图片快捷键
   }
 });
 
@@ -771,6 +1587,198 @@ document.querySelectorAll(".modal").forEach((m) => {
 // 页面关闭时清理
 window.addEventListener("beforeunload", () => {
   if (currentRoomId) socket.emit("leaveRoom", currentRoomId);
-  closeAllCalls();
-  if (localStream) localStream.getTracks().forEach((t) => t.stop());
+});
+
+/* ============ 管理员和WhatsApp功能 ============ */
+let isAdmin = false;
+let adminToken = null;
+let currentAdminSession = null;
+
+// 管理员登录按钮
+document.getElementById("adminLoginBtn").addEventListener("click", () => {
+  document.getElementById("adminLoginModal").classList.remove("hidden");
+  document.getElementById("adminPassword").focus();
+});
+
+// 管理员登录表单
+document.getElementById("adminLoginConfirm").addEventListener("click", () => {
+  const password = document.getElementById("adminPassword").value;
+  if (!password.trim()) {
+    showNotice("请输入管理员密码");
+    return;
+  }
+
+  socket.emit("admin-login", { password: password });
+});
+
+// 管理员登录取消
+document.getElementById("adminLoginCancel").addEventListener("click", () => {
+  document.getElementById("adminLoginModal").classList.add("hidden");
+  document.getElementById("adminPassword").value = "";
+});
+
+document.getElementById("adminLoginClose").addEventListener("click", () => {
+  document.getElementById("adminLoginModal").classList.add("hidden");
+  document.getElementById("adminPassword").value = "";
+});
+
+// 监听管理员登录结果
+socket.on("admin-login-success", ({ token, message, sessionInfo }) => {
+  isAdmin = true;
+  adminToken = token;
+  currentAdminSession = sessionInfo;
+
+  document.getElementById("adminLoginModal").classList.add("hidden");
+  document.getElementById("adminPassword").value = "";
+
+  showNotice(`管理员登录成功！会话时长: ${Math.round(sessionInfo.duration / 60000)}分钟`);
+
+  // 更新UI显示管理员状态
+  document.getElementById("adminLoginBtn").innerHTML = "👑 管理员";
+  document.getElementById("adminLoginBtn").classList.add("admin-active");
+
+  console.log("管理员会话信息:", sessionInfo);
+});
+
+socket.on("admin-login-failed", ({ message }) => {
+  showNotice(`管理员登录失败: ${message}`);
+  document.getElementById("adminPassword").value = "";
+});
+
+// WhatsApp分享按钮
+document.getElementById("whatsappShareBtn").addEventListener("click", () => {
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+
+  // 检查是否已设置WhatsApp信息
+  socket.emit("get-social-links", {});
+});
+
+// 监听WhatsApp信息响应
+socket.on("social-links-response", ({ links }) => {
+  if (links.whatsapp) {
+    // 已设置WhatsApp信息，分享到房间
+    socket.emit("share-whatsapp-info", { roomId: currentRoomId });
+  } else {
+    // 未设置，显示设置弹窗
+    document.getElementById("whatsappModal").classList.remove("hidden");
+    document.getElementById("whatsappNumber").focus();
+  }
+});
+
+// WhatsApp设置保存
+document.getElementById("whatsappSave").addEventListener("click", () => {
+  const number = document.getElementById("whatsappNumber").value.trim();
+  const displayName = document.getElementById("whatsappDisplayName").value.trim();
+
+  if (!number) {
+    showNotice("请输入WhatsApp号码");
+    return;
+  }
+
+  socket.emit("update-social-links", {
+    platform: "whatsapp",
+    contactInfo: {
+      number,
+      displayName: displayName || config.nickname
+    }
+  });
+
+  document.getElementById("whatsappModal").classList.add("hidden");
+
+  // 如果在房间内，自动分享
+  if (currentRoomId) {
+    setTimeout(() => {
+      socket.emit("share-whatsapp-info", { roomId: currentRoomId });
+    }, 500);
+  }
+});
+
+// WhatsApp设置取消
+document.getElementById("whatsappCancel").addEventListener("click", () => {
+  document.getElementById("whatsappModal").classList.add("hidden");
+});
+
+document.getElementById("whatsappClose").addEventListener("click", () => {
+  document.getElementById("whatsappModal").classList.add("hidden");
+});
+
+// 监听WhatsApp设置结果
+socket.on("social-links-updated", ({ platform, success, data }) => {
+  if (success && platform === "whatsapp") {
+    showNotice("WhatsApp信息已保存");
+    console.log("WhatsApp信息设置成功:", data);
+  }
+});
+
+socket.on("whatsapp-share-success", ({ message }) => {
+  showNotice(message);
+});
+
+socket.on("whatsapp-share-failed", ({ message }) => {
+  showNotice(message);
+});
+
+// 监听其他用户分享的WhatsApp信息
+socket.on("whatsapp-info-shared", (shareData) => {
+  const contactInfo = shareData.whatsappInfo;
+  const message = `
+    <div class="whatsapp-share">
+      <div class="share-header">📱 ${shareData.from} 分享了WhatsApp联系信息</div>
+      <div class="share-content">
+        <strong>${contactInfo.displayName}</strong><br>
+        ${contactInfo.number}
+      </div>
+      <button class="whatsapp-chat-btn" data-number="${contactInfo.number}" data-name="${contactInfo.displayName}">
+        💬 一键聊天
+      </button>
+    </div>
+  `;
+
+  // 显示为HTML消息
+  const wrap = document.createElement("div");
+  wrap.className = "msg whatsapp";
+  wrap.innerHTML = message;
+
+  // 添加一键聊天功能
+  const chatBtn = wrap.querySelector('.whatsapp-chat-btn');
+  if (chatBtn) {
+    chatBtn.addEventListener('click', () => {
+      const whatsappNumber = contactInfo.number.replace(/\D/g, '');
+      const whatsappLink = `https://wa.me/${whatsappNumber}`;
+      window.open(whatsappLink, '_blank');
+      showNotice(`正在打开WhatsApp与 ${contactInfo.displayName} 对话`);
+    });
+  }
+
+  chatMessages.appendChild(wrap);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+});
+
+// 管理员操作结果监听
+socket.on("admin-operation-success", ({ operation, roomId, message, roomInfo }) => {
+  showNotice(message);
+  if (operation === "clear-room") {
+    console.log("房间清除成功:", roomInfo);
+  }
+});
+
+socket.on("admin-operation-failed", ({ message }) => {
+  showNotice(`管理员操作失败: ${message}`);
+});
+
+// 图片消息接收
+socket.on("image-message", (messageData) => {
+  if (messageData.roomId === currentRoomId) {
+    displayImageMessage(messageData);
+    playTone(660, 0.15, "sine", 0.1);
+    showNotice(`收到 ${messageData.from} 的图片`);
+  }
+});
+
+// 图片发送错误处理
+socket.on("image-error", ({ message }) => {
+  showNotice(`图片发送失败: ${message}`);
 });

@@ -1,0 +1,44 @@
+{
+  "db9c909d2ddc5509": {
+    "nickname": "用户222",
+    "browserId": "bid_1787759312475_v47efscmn2l",
+    "preferences": {},
+    "createdAt": 1787759312677,
+    "lastSeen": 1787759312677,
+    "fingerprintHistory": []
+  },
+  "84d4e7311b5bf057": {
+    "nickname": "用户9876",
+    "preferences": {},
+    "createdAt": 1787759319978,
+    "lastSeen": 1787759319978,
+    "fingerprintHistory": []
+  },
+  "9cad9dfc2b703374": {
+    "nickname": "用户9876",
+    "browserId": "bid_1787759321512_2gct4b5r0wh",
+    "preferences": {},
+    "createdAt": 1787759321533,
+    "lastSeen": 1787760924440,
+    "fingerprintHistory": [
+      {
+        "old": "9cad9dfc2ff438a7",
+        "new": "9cad9dfc2b703374",
+        "timestamp": 1787760114958,
+        "reason": "IP或其他特征变化"
+      },
+      {
+        "old": "9cad9dfc2b703374",
+        "new": "9cad9dfc2ff438a7",
+        "timestamp": 1787760223024,
+        "reason": "IP或其他特征变化"
+      },
+      {
+        "old": "9cad9dfc2ff438a7",
+        "new": "9cad9dfc2b703374",
+        "timestamp": 1787760924440,
+        "reason": "IP或其他特征变化"
+      }
+    ]
+  }
+}

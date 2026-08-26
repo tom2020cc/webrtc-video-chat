@@ -18,6 +18,8 @@
         <div class="meta">
             <span class="pill" title="昵称">😀 <span id="userNickname">…</span></span>
             <span class="pill" title="PeerID">🆔 <span id="userPeerId">加载中…</span></span>
+            <span class="pill" title="设备ID">📱 <span id="deviceId">生成中…</span></span>
+            <span class="pill" title="地理位置">🌍 <span id="locationInfo">定位中…</span></span>
             <span class="pill" title="当前房间">🏠 <span id="currentRoomId">未加入房间</span></span>
             <span class="pill timer hidden" id="callTimerPill" title="通话时长">⏱ <span id="callTimer">00:00</span></span>
         </div>
@@ -55,7 +57,11 @@
                 <ul id="memberList"></ul>
             </section>
             <section class="panel chat">
-                <h3>💬 聊天室</h3>
+                <h3>💬 聊天室
+                    <button class="icon-btn" id="clearChatBtn" title="清空聊天记录" style="font-size: 0.7rem; margin-left: auto; padding: 4px 8px;">🗑️</button>
+                    <button class="icon-btn" id="whatsappShareBtn" title="分享WhatsApp信息" style="font-size: 0.7rem; padding: 4px 8px;">📱</button>
+                    <button class="icon-btn" id="adminLoginBtn" title="管理员登录" style="font-size: 0.7rem; padding: 4px 8px;">🔐</button>
+                </h3>
                 <div id="chatMessages" class="chat-messages"></div>
                 <div id="emojiPanel" class="emoji-panel hidden"></div>
                 <form id="chatForm" class="chat-form" autocomplete="off">
@@ -74,9 +80,28 @@
         <button class="ctrl-btn" id="screenBtn" title="共享屏幕 (S)"><span class="ico">🖥️</span><span class="txt">共享屏幕</span></button>
         <button class="ctrl-btn" id="raiseHandBtn" title="举手 (R)"><span class="ico">✋</span><span class="txt">举手</span></button>
         <button class="ctrl-btn" id="snapshotBtn" title="截图"><span class="ico">📸</span><span class="txt">截图</span></button>
+        <button class="ctrl-btn" id="imageBtn" title="发送图片 (I)"><span class="ico">🖼️</span><span class="txt">图片</span></button>
+        <button class="ctrl-btn" id="fileBtn" title="发送文件"><span class="ico">📁</span><span class="txt">发送文件</span></button>
         <button class="ctrl-btn" id="copyRoomBtn" title="复制房间号"><span class="ico">🔗</span><span class="txt">复制房号</span></button>
         <button class="ctrl-btn danger" id="hangupBtn" title="离开房间" disabled><span class="ico">📞</span><span class="txt">离开房间</span></button>
     </footer>
+
+    <!-- 隐藏的图片输入 -->
+    <input type="file" id="imageInput" accept="image/*" hidden>
+
+    <!-- 文件传输区域 -->
+    <div id="fileTransferArea" class="file-transfer-area hidden">
+        <div class="file-transfer-header">
+            <h3>📁 文件传输</h3>
+            <button class="icon-btn" id="closeFileArea" title="关闭">✕</button>
+        </div>
+        <div id="fileList" class="file-list">
+            <!-- 文件列表将动态生成 -->
+        </div>
+    </div>
+
+    <!-- 隐藏的文件输入 -->
+    <input type="file" id="fileInput" class="hidden" multiple>
 
     <!-- 设置弹窗 -->
     <div id="settingsModal" class="modal hidden">
@@ -128,6 +153,45 @@
                 <button id="joinConfirm" class="primary">进入</button>
                 <button id="joinCancel">取消</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 管理员登录弹窗 -->
+    <div id="adminLoginModal" class="modal hidden">
+        <div class="modal-box">
+            <div class="modal-head">
+                <h3>🔐 管理员登录</h3>
+                <button class="icon-btn" id="adminLoginClose" title="关闭">✕</button>
+            </div>
+            <label class="field"><span>管理员密码</span><input id="adminPassword" type="password" placeholder="输入管理员密码"></label>
+            <div class="modal-actions">
+                <button id="adminLoginConfirm" class="primary">登录</button>
+                <button id="adminLoginCancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- WhatsApp设置弹窗 -->
+    <div id="whatsappModal" class="modal hidden">
+        <div class="modal-box">
+            <div class="modal-head">
+                <h3>📱 WhatsApp信息设置</h3>
+                <button class="icon-btn" id="whatsappClose" title="关闭">✕</button>
+            </div>
+            <label class="field"><span>WhatsApp号码</span><input id="whatsappNumber" type="text" placeholder="+86 138 0000 0000"></label>
+            <label class="field"><span>显示名称</span><input id="whatsappDisplayName" type="text" placeholder="您的名字"></label>
+            <div class="modal-actions">
+                <button id="whatsappSave" class="primary">保存</button>
+                <button id="whatsappCancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 图片预览模态框 -->
+    <div id="imagePreviewModal" class="image-preview-modal">
+        <div class="image-preview-content">
+            <button class="image-preview-close" id="closeImagePreview">✕</button>
+            <img id="previewImage" src="" alt="图片预览">
         </div>
     </div>
 
