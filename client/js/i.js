@@ -84,6 +84,14 @@ function loadConfig() {
   if (merged.defaultPassword === undefined) merged.defaultPassword = "";
   if (merged.camOn === undefined) merged.camOn = true;
   if (merged.micOn === undefined) merged.micOn = true;
+  // AI配置默认值
+  if (merged.aiEnabled === undefined) merged.aiEnabled = false;
+  if (merged.sttEngine === undefined) merged.sttEngine = "browser";
+  if (merged.translationApi === undefined) merged.translationApi = "openai";
+  if (merged.apiKey === undefined) merged.apiKey = "";
+  if (merged.sourceLang === undefined) merged.sourceLang = "auto";
+  if (merged.targetLang === undefined) merged.targetLang = "en-US";
+  if (merged.subtitlePosition === undefined) merged.subtitlePosition = "bottom";
   if (!merged.nickname) {
     merged.nickname = "用户" + Math.floor(1000 + Math.random() * 9000);
     localStorage.setItem(CONFIG_KEY, JSON.stringify(merged));
@@ -119,6 +127,7 @@ const screenBtn = document.getElementById("screenBtn");
 const raiseHandBtn = document.getElementById("raiseHandBtn");
 const snapshotBtn = document.getElementById("snapshotBtn");
 const copyRoomBtn = document.getElementById("copyRoomBtn");
+const subtitleBtn = document.getElementById("subtitleBtn");
 const hangupBtn = document.getElementById("hangupBtn");
 const fileBtn = document.getElementById("fileBtn");
 const fileInput = document.getElementById("fileInput");
@@ -126,6 +135,7 @@ const fileTransferArea = document.getElementById("fileTransferArea");
 const closeFileArea = document.getElementById("closeFileArea");
 const fileList = document.getElementById("fileList");
 const clearChatBtn = document.getElementById("clearChatBtn");
+const subtitleHistoryBtn = document.getElementById("subtitleHistoryBtn");
 const callTimerPill = document.getElementById("callTimerPill");
 const callTimer = document.getElementById("callTimer");
 const themeBtn = document.getElementById("themeBtn");
@@ -142,6 +152,17 @@ const cfgDefaultPassword = document.getElementById("cfgDefaultPassword");
 const cfgDefaultPasswordField = document.getElementById("cfgDefaultPasswordField");
 const cfgCamOn = document.getElementById("cfgCamOn");
 const cfgMicOn = document.getElementById("cfgMicOn");
+// AI配置DOM引用
+const cfgAiEnabled = document.getElementById("cfgAiEnabled");
+const cfgSttEngine = document.getElementById("cfgSttEngine");
+const cfgTranslationApi = document.getElementById("cfgTranslationApi");
+const cfgApiKey = document.getElementById("cfgApiKey");
+const cfgSourceLang = document.getElementById("cfgSourceLang");
+const cfgTargetLang = document.getElementById("cfgTargetLang");
+const cfgSubtitlePosition = document.getElementById("cfgSubtitlePosition");
+const cfgSubtitleFontSize = document.getElementById("cfgSubtitleFontSize");
+const cfgSubtitleBgColor = document.getElementById("cfgSubtitleBgColor");
+const cfgAutoClearSubtitle = document.getElementById("cfgAutoClearSubtitle");
 const cfgSave = document.getElementById("cfgSave");
 const cfgCancel = document.getElementById("cfgCancel");
 const cfgClose = document.getElementById("cfgClose");
@@ -161,8 +182,13 @@ let userPeerId = null;        // 当前用户 PeerID
 let localStream = null;       // 本地视频流
 let currentRoomId = null;     // 当前房间号
 let currentUsers = [];        // 当前房间成员列表
+let chatMessagesData = {};    // 聊天消息数据存储 (按房间ID分组)
 let screenStream = null;      // 屏幕共享流
 let screenTrack = null;       // 屏幕共享视频轨
+
+// 为字幕模块提供全局访问
+window.socket = socket;
+window.currentRoomId = currentRoomId;
 let isSharing = false;
 let isMuted = false;
 let isCameraOff = false;
@@ -291,6 +317,9 @@ socket = io(config.serverUrl, {
     ...getClientInfo()
   }
 });
+
+// 同步到window对象供字幕模块使用
+window.socket = socket;
 userNicknameDisplay.textContent = config.nickname;
 
 socket.on("connect_error", () => {
@@ -361,8 +390,25 @@ socket.on("error", ({ message }) => {
 // 聊天历史
 socket.on("chatHistory", ({ roomId, messages }) => {
   if (roomId === currentRoomId && messages && messages.length > 0) {
+    // 存储聊天消息数据
+    if (!chatMessagesData[roomId]) {
+      chatMessagesData[roomId] = [];
+    }
+    chatMessagesData[roomId] = messages;
+
     messages.forEach(msg => {
-      appendMessage(msg.from, msg.text, msg.time, false);
+      const isSubtitle = msg.type === 'subtitle';
+      if (isSubtitle) {
+        const subtitleData = {
+          originalText: msg.originalText || msg.text,
+          translatedText: msg.translatedText || '',
+          sourceLang: msg.sourceLang || 'auto',
+          targetLang: msg.targetLang || 'en-US'
+        };
+        appendMessage(msg.from, JSON.stringify(subtitleData), msg.time, false, msg.id, msg.replyTo, msg.forwardFrom, msg.type);
+      } else {
+        appendMessage(msg.from, msg.text, msg.time, false, msg.id, msg.replyTo, msg.forwardFrom, msg.type);
+      }
     });
     showNotice(`已加载 ${messages.length} 条历史消息`);
   }
@@ -413,8 +459,29 @@ socket.on("roomUpdate", (users) => {
   updateVideoPeers(users);
 });
 
-socket.on("chatMessage", ({ from, text, time, id, replyTo, forwardFrom, type }) => {
-  appendMessage(from, text, time, false, id, replyTo, forwardFrom, type);
+socket.on("chatMessage", (data) => {
+  const { from, text, time, id, replyTo, forwardFrom, type } = data;
+
+  // 存储聊天消息数据
+  if (!chatMessagesData[currentRoomId]) {
+    chatMessagesData[currentRoomId] = [];
+  }
+  chatMessagesData[currentRoomId].push(data);
+
+  // 字幕消息特殊处理
+  if (type === 'subtitle') {
+    const subtitleData = {
+      originalText: data.originalText || text,
+      translatedText: data.translatedText || '',
+      sourceLang: data.sourceLang || 'auto',
+      targetLang: data.targetLang || 'en-US'
+    };
+    appendMessage(from, JSON.stringify(subtitleData), time, false, id, replyTo, forwardFrom, type);
+  } else {
+    // 普通消息处理
+    appendMessage(from, text, time, false, id, replyTo, forwardFrom, type);
+  }
+
   if (from !== config.nickname) playTone(880, 0.08, "sine", 0.07);
 });
 socket.on("systemMessage", ({ text, time }) => {
@@ -480,6 +547,41 @@ async function initLocalStream() {
   } catch (err) {
     console.error("获取媒体流失败：", err);
     showNotice("无法访问摄像头/麦克风，将以旁观模式加入");
+  }
+
+  // 初始化AI字幕模块
+  initSubtitleModule();
+}
+
+function initSubtitleModule() {
+  // 检查是否启用AI功能
+  if (!config.aiEnabled) {
+    console.log("AI功能未启用，跳过字幕模块初始化");
+    return;
+  }
+
+  // 检查浏览器支持
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    console.warn("浏览器不支持 Web Speech API");
+    showNotice("您的浏览器不支持语音识别功能");
+    return;
+  }
+
+  // 初始化字幕模块
+  if (window.Subtitles && !window.Subtitles.manager) {
+    console.log("初始化AI字幕模块...");
+    window.Subtitles.init();
+
+    // 更新字幕模块的语言配置
+    if (window.Subtitles.manager) {
+      window.Subtitles.manager.updateLanguage(config.sourceLang, config.targetLang);
+    }
+
+    console.log("AI字幕模块初始化完成");
+  } else if (window.Subtitles && window.Subtitles.manager) {
+    // 更新现有模块的语言配置
+    window.Subtitles.manager.updateLanguage(config.sourceLang, config.targetLang);
   }
 }
 
@@ -630,6 +732,7 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
     let typeIndicator = '';
     if (type === 'forward') typeIndicator = '↪️ ';
     if (type === 'whatsapp_share') typeIndicator = '📱 ';
+    if (type === 'subtitle') typeIndicator = '📝 ';
 
     meta.textContent = `${typeIndicator}${from} · ${formatTime(time)}`;
 
@@ -679,10 +782,50 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = text;
 
-    if (forwardFrom) {
-      bubble.classList.add('forwarded');
+    // 字幕类型特殊处理
+    if (type === 'subtitle') {
+      bubble.classList.add('subtitle');
+
+      // 解析字幕数据（假设text字段包含JSON格式的字幕数据）
+      let subtitleData;
+      try {
+        subtitleData = typeof text === 'string' ? JSON.parse(text) : text;
+      } catch (e) {
+        subtitleData = { originalText: text, translatedText: '' };
+      }
+
+      // 显示原文
+      const originalDiv = document.createElement("div");
+      originalDiv.className = "subtitle-original";
+      originalDiv.textContent = subtitleData.originalText || text;
+
+      // 显示译文（如果有）
+      if (subtitleData.translatedText) {
+        const translatedDiv = document.createElement("div");
+        translatedDiv.className = "subtitle-translated";
+        translatedDiv.textContent = subtitleData.translatedText;
+        bubble.appendChild(translatedDiv);
+      }
+
+      bubble.appendChild(originalDiv);
+
+      // 添加语言标签
+      if (subtitleData.sourceLang || subtitleData.targetLang) {
+        const langLabel = document.createElement("div");
+        langLabel.className = "subtitle-lang";
+        const sourceLang = subtitleData.sourceLang || 'auto';
+        const targetLang = subtitleData.targetLang || '';
+        langLabel.textContent = `${sourceLang} → ${targetLang}`;
+        bubble.appendChild(langLabel);
+      }
+    } else {
+      // 普通消息处理
+      bubble.textContent = text;
+
+      if (forwardFrom) {
+        bubble.classList.add('forwarded');
+      }
     }
 
     wrap.appendChild(bubble);
@@ -755,6 +898,7 @@ function setRoomState(inRoom) {
 
 function resetRoomUI() {
   currentRoomId = null;
+  window.currentRoomId = currentRoomId; // 同步到window对象
   currentRoomIdDisplay.textContent = "未加入房间";
   roomIdInput.value = "";
   setRoomState(false);
@@ -771,6 +915,7 @@ createRoomBtn.addEventListener("click", async () => {
   if (!localStream) await initLocalStream();
   socket.emit("createRoom", { roomId, password });
   currentRoomId = roomId;
+  window.currentRoomId = currentRoomId; // 同步到window对象
   currentRoomIdDisplay.textContent = roomId;
   roomIdInput.value = "";
   roomPasswordInput.value = "";
@@ -782,6 +927,7 @@ async function doJoinRoom(roomId, password) {
   if (!localStream) await initLocalStream();
   socket.emit("joinRoom", { roomId, password });
   currentRoomId = roomId;
+  window.currentRoomId = currentRoomId; // 同步到window对象
   currentRoomIdDisplay.textContent = roomId;
   setRoomState(true);
 }
@@ -790,6 +936,7 @@ function leaveRoom() {
   if (!currentRoomId) return;
   socket.emit("leaveRoom", currentRoomId);
   currentRoomId = null;
+  window.currentRoomId = currentRoomId; // 同步到window对象
   currentRoomIdDisplay.textContent = "未加入房间";
   closeAllCalls();
   stopLocalStream();
@@ -1213,6 +1360,18 @@ function openSettings() {
   cfgDefaultPassword.value = config.defaultPassword || "";
   cfgCamOn.checked = config.camOn !== false;
   cfgMicOn.checked = config.micOn !== false;
+  // AI配置回填
+  cfgAiEnabled.checked = !!config.aiEnabled;
+  cfgSttEngine.value = config.sttEngine || "browser";
+  cfgTranslationApi.value = config.translationApi || "openai";
+  cfgApiKey.value = config.apiKey || "";
+  cfgSourceLang.value = config.sourceLang || "auto";
+  cfgTargetLang.value = config.targetLang || "en-US";
+  cfgSubtitlePosition.value = config.subtitlePosition || "bottom";
+  // 恢复字幕样式配置
+  if (cfgSubtitleFontSize) cfgSubtitleFontSize.value = config.subtitleFontSize || "medium";
+  if (cfgSubtitleBgColor) cfgSubtitleBgColor.value = config.subtitleBgColor || "semi-transparent";
+  if (cfgAutoClearSubtitle) cfgAutoClearSubtitle.checked = config.autoClearSubtitle !== undefined ? config.autoClearSubtitle : true;
   syncPasswordField();
   updatePresetActive();
   settingsModal.classList.remove("hidden");
@@ -1251,6 +1410,258 @@ function clearChatHistory() {
   }
 }
 
+/* ============ 字幕历史管理 ============ */
+let subtitleHistoryData = []; // 存储字幕历史数据
+let filteredSubtitleData = []; // 过滤后的数据
+
+// 打开字幕历史查看
+function openSubtitleHistory() {
+  if (!currentRoomId) {
+    showNotice("请先加入房间");
+    return;
+  }
+
+  subtitleHistoryModal.classList.remove("hidden");
+  subtitleHistoryRoom.textContent = `(房间: ${currentRoomId})`;
+
+  // 获取字幕历史数据
+  loadSubtitleHistory();
+}
+
+// 关闭字幕历史查看
+function closeSubtitleHistory() {
+  subtitleHistoryModal.classList.add("hidden");
+}
+
+// 加载字幕历史数据
+function loadSubtitleHistory() {
+  // 从聊天历史中筛选字幕消息
+  const roomMessages = chatMessagesData[currentRoomId] || [];
+
+  subtitleHistoryData = roomMessages.filter(msg => msg.type === 'subtitle');
+
+  // 初始不过滤
+  filteredSubtitleData = [...subtitleHistoryData];
+
+  // 显示字幕历史
+  displaySubtitleHistory();
+  updateSubtitleStats();
+}
+
+// 显示字幕历史
+function displaySubtitleHistory() {
+  const container = subtitleHistoryList;
+
+  if (filteredSubtitleData.length === 0) {
+    container.innerHTML = `
+      <div class="subtitle-history-empty">
+        <div class="icon">📝</div>
+        <p>暂无字幕记录</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = filteredSubtitleData.map(item => {
+    const time = new Date(item.time).toLocaleString();
+    const searchTerm = subtitleSearchInput.value.toLowerCase();
+    const originalText = highlightSearchTerm(item.originalText || '', searchTerm);
+    const translatedText = highlightSearchTerm(item.translatedText || '', searchTerm);
+
+    return `
+      <div class="subtitle-history-item" data-id="${item.id}">
+        <div class="subtitle-history-header">
+          <span class="subtitle-history-speaker">${item.from || item.speaker || '未知用户'}</span>
+          <span class="subtitle-history-time">${time}</span>
+        </div>
+        <div class="subtitle-history-content">
+          <div class="subtitle-history-original">${originalText}</div>
+          ${translatedText ? `<div class="subtitle-history-translated">${translatedText}</div>` : ''}
+        </div>
+        <div class="subtitle-history-langs">
+          <span class="lang-badge">${item.sourceLang || 'auto'} → ${item.targetLang || 'en'}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// 高亮搜索词
+function highlightSearchTerm(text, searchTerm) {
+  if (!searchTerm || !text) return text;
+
+  const regex = new RegExp(`(${searchTerm})`, 'gi');
+  return text.replace(regex, '<span class="highlight">$1</span>');
+}
+
+// 搜索字幕
+function searchSubtitles() {
+  const searchTerm = subtitleSearchInput.value.toLowerCase().trim();
+  const langFilter = subtitleLangFilter.value;
+  const timeFilter = subtitleTimeFilter.value;
+
+  filteredSubtitleData = subtitleHistoryData.filter(item => {
+    // 文本搜索
+    const matchesSearch = !searchTerm ||
+      (item.originalText && item.originalText.toLowerCase().includes(searchTerm)) ||
+      (item.translatedText && item.translatedText.toLowerCase().includes(searchTerm));
+
+    // 语言过滤
+    const matchesLang = langFilter === 'all' ||
+      item.sourceLang === langFilter ||
+      item.targetLang === langFilter;
+
+    // 时间过滤
+    let matchesTime = true;
+    if (timeFilter !== 'all') {
+      const itemTime = new Date(item.time);
+      const now = new Date();
+
+      switch (timeFilter) {
+        case 'today':
+          matchesTime = itemTime.toDateString() === now.toDateString();
+          break;
+        case 'week':
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          matchesTime = itemTime >= weekAgo;
+          break;
+        case 'month':
+          const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          matchesTime = itemTime >= monthAgo;
+          break;
+      }
+    }
+
+    return matchesSearch && matchesLang && matchesTime;
+  });
+
+  displaySubtitleHistory();
+  updateSubtitleStats();
+}
+
+// 更新统计信息
+function updateSubtitleStats() {
+  subtitleTotalCount.textContent = filteredSubtitleData.length;
+
+  if (filteredSubtitleData.length > 0) {
+    const times = filteredSubtitleData.map(item => item.time).sort((a, b) => a - b);
+    subtitleEarliestTime.textContent = new Date(times[0]).toLocaleString();
+    subtitleLatestTime.textContent = new Date(times[times.length - 1]).toLocaleString();
+  } else {
+    subtitleEarliestTime.textContent = '-';
+    subtitleLatestTime.textContent = '-';
+  }
+}
+
+// 导出SRT格式
+function exportToSrt() {
+  if (filteredSubtitleData.length === 0) {
+    showNotice("没有可导出的字幕");
+    return;
+  }
+
+  // 按时间排序
+  const sortedData = [...filteredSubtitleData].sort((a, b) => a.time - b.time);
+
+  let srtContent = '';
+  let index = 1;
+
+  sortedData.forEach((item, i) => {
+    const startTime = formatSrtTime(item.time);
+    // 假设每条字幕显示3秒
+    const endTime = formatSrtTime(item.time + 3000);
+
+    srtContent += `${index}\n`;
+    srtContent += `${startTime} --> ${endTime}\n`;
+    srtContent += `${item.originalText || ''}\n`;
+    if (item.translatedText) {
+      srtContent += `${item.translatedText}\n`;
+    }
+    srtContent += '\n';
+
+    index++;
+  });
+
+  downloadFile(`subtitles_${currentRoomId}_${Date.now()}.srt`, srtContent, 'text/plain');
+  showNotice("SRT字幕已导出");
+}
+
+// 格式化SRT时间 (HH:MM:SS,mmm)
+function formatSrtTime(timestamp) {
+  const date = new Date(timestamp);
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+
+  return `${hours}:${minutes}:${seconds},${milliseconds}`;
+}
+
+// 导出TXT格式
+function exportToTxt() {
+  if (filteredSubtitleData.length === 0) {
+    showNotice("没有可导出的字幕");
+    return;
+  }
+
+  let txtContent = `房间 ${currentRoomId} 字幕记录\n`;
+  txtContent += `导出时间: ${new Date().toLocaleString()}\n`;
+  txtContent += `共 ${filteredSubtitleData.length} 条记录\n`;
+  txtContent += '='.repeat(50) + '\n\n';
+
+  filteredSubtitleData.forEach((item, index) => {
+    const time = new Date(item.time).toLocaleString();
+    txtContent += `[${index + 1}] ${time} - ${item.from || item.speaker || '未知'}\n`;
+    txtContent += `原文 (${item.sourceLang}): ${item.originalText || ''}\n`;
+    if (item.translatedText) {
+      txtContent += `译文 (${item.targetLang}): ${item.translatedText}\n`;
+    }
+    txtContent += '\n';
+  });
+
+  downloadFile(`subtitles_${currentRoomId}_${Date.now()}.txt`, txtContent, 'text/plain');
+  showNotice("TXT字幕已导出");
+}
+
+// 导出JSON格式
+function exportToJson() {
+  if (filteredSubtitleData.length === 0) {
+    showNotice("没有可导出的字幕");
+    return;
+  }
+
+  const jsonData = {
+    room: currentRoomId,
+    exportTime: new Date().toISOString(),
+    totalRecords: filteredSubtitleData.length,
+    records: filteredSubtitleData.map(item => ({
+      id: item.id,
+      time: new Date(item.time).toISOString(),
+      from: item.from || item.speaker,
+      originalText: item.originalText,
+      translatedText: item.translatedText,
+      sourceLang: item.sourceLang,
+      targetLang: item.targetLang
+    }))
+  };
+
+  downloadFile(`subtitles_${currentRoomId}_${Date.now()}.json`, JSON.stringify(jsonData, null, 2), 'application/json');
+  showNotice("JSON字幕已导出");
+}
+
+// 下载文件辅助函数
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 /* ============ 昵称更新功能 ============ */
 function updateNickname(newNickname) {
   if (!newNickname || !newNickname.trim()) {
@@ -1272,6 +1683,53 @@ raiseHandBtn.addEventListener("click", () => {
   socket.emit("raiseHand", { roomId: currentRoomId, raised: handRaised });
   raiseHandBtn.classList.toggle("on", handRaised);
 });
+
+// AI 字幕按钮事件处理
+subtitleBtn.addEventListener("click", toggleSubtitles);
+
+function toggleSubtitles() {
+  if (!window.Subtitles) {
+    showNotice("字幕模块未初始化，请检查配置");
+    return;
+  }
+
+  const isRunning = window.Subtitles.isRunning();
+
+  if (isRunning) {
+    window.Subtitles.stop();
+    subtitleBtn.classList.remove("on");
+    showNotice("字幕功能已关闭");
+  } else {
+    // 检查AI配置
+    if (!config.aiEnabled) {
+      showNotice("请先在设置中启用AI功能");
+      openSettings();
+      return;
+    }
+
+    window.Subtitles.start();
+    subtitleBtn.classList.add("on");
+    showNotice("字幕功能已开启");
+  }
+
+  syncSubtitleButton();
+}
+
+function syncSubtitleButton() {
+  const isRunning = window.Subtitles?.isRunning() || false;
+  subtitleBtn.classList.toggle("on", isRunning);
+
+  const icon = subtitleBtn.querySelector(".ico");
+  const text = subtitleBtn.querySelector(".txt");
+
+  if (isRunning) {
+    icon.textContent = "📝";
+    text.textContent = "字幕中";
+  } else {
+    icon.textContent = "📝";
+    text.textContent = "字幕";
+  }
+}
 snapshotBtn.addEventListener("click", captureSnapshot);
 copyRoomBtn.addEventListener("click", copyRoomId);
 emojiBtn.addEventListener("click", () => emojiPanel.classList.toggle("hidden"));
@@ -1287,6 +1745,22 @@ const imageInput = document.getElementById("imageInput");
 const imagePreviewModal = document.getElementById("imagePreviewModal");
 const previewImage = document.getElementById("previewImage");
 const closeImagePreview = document.getElementById("closeImagePreview");
+
+// 字幕历史模态框
+const subtitleHistoryModal = document.getElementById("subtitleHistoryModal");
+const subtitleHistoryRoom = document.getElementById("subtitleHistoryRoom");
+const subtitleHistoryList = document.getElementById("subtitleHistoryList");
+const subtitleSearchInput = document.getElementById("subtitleSearchInput");
+const subtitleSearchBtn = document.getElementById("subtitleSearchBtn");
+const subtitleLangFilter = document.getElementById("subtitleLangFilter");
+const subtitleTimeFilter = document.getElementById("subtitleTimeFilter");
+const subtitleTotalCount = document.getElementById("subtitleTotalCount");
+const subtitleEarliestTime = document.getElementById("subtitleEarliestTime");
+const subtitleLatestTime = document.getElementById("subtitleLatestTime");
+const exportSrtBtn = document.getElementById("exportSrtBtn");
+const exportTxtBtn = document.getElementById("exportTxtBtn");
+const exportJsonBtn = document.getElementById("exportJsonBtn");
+const subtitleHistoryClose = document.getElementById("subtitleHistoryClose");
 
 imageBtn.addEventListener("click", () => {
   if (!currentRoomId) {
@@ -1448,6 +1922,20 @@ closeImagePreview.addEventListener('click', () => {
   imagePreviewModal.classList.remove('active');
 });
 
+// 字幕历史事件监听器
+subtitleHistoryClose.addEventListener('click', closeSubtitleHistory);
+subtitleSearchBtn.addEventListener('click', searchSubtitles);
+subtitleSearchInput.addEventListener('input', () => {
+  if (subtitleSearchInput.value.length >= 2 || subtitleSearchInput.value.length === 0) {
+    searchSubtitles();
+  }
+});
+subtitleLangFilter.addEventListener('change', searchSubtitles);
+subtitleTimeFilter.addEventListener('change', searchSubtitles);
+exportSrtBtn.addEventListener('click', exportToSrt);
+exportTxtBtn.addEventListener('click', exportToTxt);
+exportJsonBtn.addEventListener('click', exportToJson);
+
 // 点击模态框背景关闭预览
 imagePreviewModal.addEventListener('click', (e) => {
   if (e.target === imagePreviewModal) {
@@ -1487,6 +1975,7 @@ closeFileArea.addEventListener("click", hideFileTransferArea);
 
 // 清空聊天记录
 clearChatBtn.addEventListener("click", clearChatHistory);
+subtitleHistoryBtn.addEventListener("click", openSubtitleHistory);
 joinConfirm.addEventListener("click", () => {
   if (!pendingJoinRoom) return;
   const roomId = pendingJoinRoom;
@@ -1517,6 +2006,18 @@ cfgSave.addEventListener("click", () => {
   config.defaultPassword = cfgDefaultPassword.value.trim();
   config.camOn = cfgCamOn.checked;
   config.micOn = cfgMicOn.checked;
+  // AI配置保存
+  config.aiEnabled = cfgAiEnabled.checked;
+  config.sttEngine = cfgSttEngine.value;
+  config.translationApi = cfgTranslationApi.value;
+  config.apiKey = cfgApiKey.value.trim();
+  config.sourceLang = cfgSourceLang.value;
+  config.targetLang = cfgTargetLang.value;
+  config.subtitlePosition = cfgSubtitlePosition.value;
+  // 新增字幕样式配置
+  config.subtitleFontSize = cfgSubtitleFontSize ? cfgSubtitleFontSize.value : 'medium';
+  config.subtitleBgColor = cfgSubtitleBgColor ? cfgSubtitleBgColor.value : 'semi-transparent';
+  config.autoClearSubtitle = cfgAutoClearSubtitle ? cfgAutoClearSubtitle.checked : true;
   config.env = /localhost|127\.0\.0\.1/.test(config.peerHost + config.serverUrl) ? "local" : "prod";
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
 
@@ -1576,6 +2077,7 @@ window.addEventListener("keydown", (e) => {
     case "s": isSharing ? stopScreenShare() : startScreenShare(); break;
     case "r": if (currentRoomId) raiseHandBtn.click(); break;
     case "i": if (currentRoomId) imageBtn.click(); break; // 图片快捷键
+    case "t": if (currentRoomId) subtitleBtn.click(); break; // 字幕快捷键
   }
 });
 

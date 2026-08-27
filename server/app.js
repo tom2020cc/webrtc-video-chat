@@ -645,6 +645,41 @@ io.on("connection", async (socket) => {
     }
   });
 
+  // 字幕消息：AI实时翻译的字幕内容
+  socket.on("subtitleMessage", ({ roomId, originalText, translatedText, sourceLang, targetLang, speaker }) => {
+    if (rooms[roomId] && socket.rooms.has(roomId)) {
+      const subtitleMessage = {
+        id: Date.now() + Math.random(),
+        from: speaker || socket.data.nickname,
+        deviceFingerprint,
+        originalText: originalText,
+        translatedText: translatedText || '',
+        sourceLang: sourceLang || 'auto',
+        targetLang: targetLang || 'en-US',
+        speaker: speaker || socket.data.nickname,
+        time: Date.now(),
+        type: 'subtitle'
+      };
+
+      // 保存字幕到聊天历史
+      if (!chatHistory[roomId]) {
+        chatHistory[roomId] = [];
+      }
+      chatHistory[roomId].push(subtitleMessage);
+
+      // 保持最近100条消息（包括字幕）
+      if (chatHistory[roomId].length > 100) {
+        chatHistory[roomId] = chatHistory[roomId].slice(-100);
+      }
+      saveChatHistory();
+
+      // 广播字幕消息到房间内所有人
+      io.to(roomId).emit("chatMessage", subtitleMessage);
+
+      console.log(`字幕消息已发送到房间 ${roomId}: ${originalText.substring(0, 30)}... -> ${translatedText?.substring(0, 30)}...`);
+    }
+  });
+
   // 删除消息（仅限发送者或管理员）
   socket.on("deleteMessage", ({ roomId, messageId, adminToken }) => {
     if (!rooms[roomId] || !socket.rooms.has(roomId)) {
