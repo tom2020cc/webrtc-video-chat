@@ -356,21 +356,31 @@
       try {
         let translatedText = '';
 
-        switch (this.config.translationApi) {
-          case 'openai':
-            translatedText = await this.translateWithOpenAI(text, sourceLang, targetLang);
-            break;
-          case 'deepl':
-            translatedText = await this.translateWithDeepL(text, sourceLang, targetLang);
-            break;
-          case 'google':
-            translatedText = await this.translateWithGoogle(text, sourceLang, targetLang);
-            break;
-          case 'baidu':
-            translatedText = await this.translateWithBaidu(text, sourceLang, targetLang);
-            break;
-          default:
-            translatedText = text;
+        // 检查API密钥是否有效，如果是示例密钥则使用免费方案
+        const isDemoKey = !this.config.apiKey || this.config.apiKey.includes('demo-key') || this.config.apiKey.includes('replace-with');
+
+        if (isDemoKey) {
+          // 免费方案：使用浏览器内置翻译或简单的语言检测
+          console.log('使用免费翻译方案（无API密钥）');
+          translatedText = await this.translateWithFreeAPI(text, sourceLang, targetLang);
+        } else {
+          // 根据配置选择翻译服务
+          switch (this.config.translationApi) {
+            case 'openai':
+              translatedText = await this.translateWithOpenAI(text, sourceLang, targetLang);
+              break;
+            case 'deepl':
+              translatedText = await this.translateWithDeepL(text, sourceLang, targetLang);
+              break;
+            case 'google':
+              translatedText = await this.translateWithGoogle(text, sourceLang, targetLang);
+              break;
+            case 'baidu':
+              translatedText = await this.translateWithBaidu(text, sourceLang, targetLang);
+              break;
+            default:
+              translatedText = text;
+          }
         }
 
         // 缓存结果
@@ -543,6 +553,39 @@
       }
 
       return data.trans_result[0].dst;
+    }
+
+    // 免费翻译API方案（无需API密钥）
+    async translateWithFreeAPI(text, sourceLang, targetLang) {
+      try {
+        // 方案1: 使用免费的LibreTranslate API（如果有可用的实例）
+        // 方案2: 使用简单的语言检测和提示
+        // 方案3: 返回原文并提示用户
+
+        console.log('使用免费翻译方案:', { sourceLang, targetLang, text: text.substring(0, 30) });
+
+        // 简单的免费翻译方案：返回原文并添加语言标签
+        const langNames = {
+          'zh-CN': '中文', 'en-US': '英语', 'ja-JP': '日语', 'ko-KR': '韩语',
+          'fr-FR': '法语', 'de-DE': '德语', 'es-ES': '西班牙语', 'auto': '自动检测'
+        };
+
+        const sourceName = langNames[sourceLang] || sourceLang;
+        const targetName = langNames[targetLang] || targetLang;
+
+        // 如果源语言和目标语言相同，直接返回原文
+        if (sourceLang === targetLang) {
+          return text;
+        }
+
+        // 免费方案：返回带有语言提示的文本
+        // 实际应用中可以替换为免费的翻译API
+        return `[${sourceName}→${targetName}] ${text}`;
+
+      } catch (error) {
+        console.error('免费翻译失败:', error);
+        return text; // 失败时返回原文
+      }
     }
 
     // MD5签名函数（简化版本，用于百度翻译）

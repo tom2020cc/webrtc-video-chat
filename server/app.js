@@ -1,7 +1,6 @@
 const path = require("path");
 const express = require("express");
 const http = require("http");
-const https = require("https");
 const socketIo = require("socket.io");
 const cors = require("cors");
 const { PeerServer } = require("peer");
@@ -1111,4 +1110,11 @@ io.on("connection", async (socket) => {
   });
 });
 
-server.listen(3000, () => { console.log("服务器启动，监听端口 3000"); });
+// 监听所有网络接口，支持手机访问
+server.listen(3000, '0.0.0.0', () => {
+  console.log("📡 HTTP服务器启动，监听所有网络接口的 3000 端口");
+  console.log("🖥️ 本地访问: http://localhost:3000");
+  console.log("📱 局域网访问: http://YOUR_LOCAL_IP:3000");
+  console.log("🌐 真实域名访问: http://YOUR_DOMAIN:3000");
+  console.log("💡 提示: 真实环境建议配置HTTPS以获得完整摄像头权限");
+});

@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC 本地测试教程 - 手机与电脑互通</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .section h3 {
+            color: #764ba2;
+            font-size: 1.3em;
+            margin: 20px 0 10px 0;
+        }
+
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 8px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .step:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .step-number {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            width: 30px;
+            height: 30px;
+            text-align: center;
+            line-height: 30px;
+            border-radius: 50%;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            position: relative;
+        }
+
+        .code-block::before {
+            content: '命令';
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: #667eea;
+            color: white;
+            padding: 4px 8px;
+            font-size: 12px;
+            border-bottom-left-radius: 8px;
+        }
+
+        .code-block code {
+            color: #68d391;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border: 2px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .warning-box {
+            background: #fff3e0;
+            border: 2px solid #ff9800;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .success-box {
+            background: #e8f5e9;
+            border: 2px solid #4caf50;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .icon {
+            font-size: 1.5em;
+            margin-right: 10px;
+        }
+
+        .network-info {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+
+        .info-card {
+            flex: 1;
+            min-width: 250px;
+            background: white;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .info-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #4caf50;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+
+        .test-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .test-list li {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .test-list li::before {
+            content: '✓';
+            background: #4caf50;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+
+        .faq-item {
+            margin: 20px 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .faq-question {
+            background: #f5f5f5;
+            padding: 15px;
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .faq-answer {
+            padding: 15px;
+            background: white;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .emoji-header {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .network-info {
+                flex-direction: column;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .header h1 {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="emoji-header">📱💻🎥</div>
+            <h1>WebRTC 本地测试教程</h1>
+            <p>手机与电脑互通测试完整指南</p>
+        </div>
+
+        <div class="content">
+            <!-- 第一步：准备工作 -->
+            <div class="section">
+                <h2>🎯 准备工作</h2>
+
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <strong>确认网络环境</strong>
+                    <p>确保手机和电脑连接到同一个Wi-Fi网络</p>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <strong>获取电脑IP地址</strong>
+                    <p>在命令提示符(CMD)中输入以下命令：</p>
+                    <div class="code-block">
+                        <code>ipconfig</code>
+                    </div>
+                    <p>查找"IPv4 地址"，例如：<strong>192.168.31.155</strong></p>
+                </div>
+
+                <div class="network-info">
+                    <div class="info-card">
+                        <div>🖥️ 本机IP</div>
+                        <div class="value" id="localIP">192.168.31.155</div>
+                        <small>您的电脑局域网地址</small>
+                    </div>
+                    <div class="info-card">
+                        <div>📡 服务端口</div>
+                        <div class="value">3000</div>
+                        <small>WebRTC服务端口</small>
+                    </div>
+                    <div class="info-card">
+                        <div>🌐 访问地址</div>
+                        <div class="value" style="font-size: 1.2em;">http://192.168.31.155:3000</div>
+                        <small>手机浏览器输入此地址</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第二步：启动服务器 -->
+            <div class="section">
+                <h2>🚀 启动服务器</h2>
+
+                <h3>方法一：普通启动</h3>
+                <div class="code-block">
+                    <code>npm start</code>
+                </div>
+
+                <h3>方法二：开发模式（推荐）</h3>
+                <div class="code-block">
+                    <code>npm run dev</code>
+                </div>
+
+                <div class="success-box">
+                    <strong>✅ 启动成功标志：</strong>
+                    <p>看到控制台输出：<code>"服务器启动，监听端口 3000"</code></p>
+                </div>
+
+                <div class="warning-box">
+                    <strong>⚠️ 防火墙设置：</strong>
+                    <p>如果启动失败，请确保防火墙允许端口3000的入站连接</p>
+                </div>
+            </div>
+
+            <!-- 第三步：手机访问 -->
+            <div class="section">
+                <h2>📱 手机访问设置</h2>
+
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <strong>打开手机浏览器</strong>
+                    <p>推荐使用 Chrome、Safari 或其他现代浏览器</p>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <strong>输入访问地址</strong>
+                    <div class="code-block">
+                        <code id="mobileUrl">http://192.168.31.155:3000</code>
+                        <button class="copy-btn" onclick="copyToClipboard('mobileUrl')">复制</button>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <span class="step-number">3</span>
+                    <strong>允许权限</strong>
+                    <p>浏览器会请求摄像头和麦克风权限，请点击"允许"</p>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="testConnection()">🔗 测试连接</button>
+                    <button class="btn btn-success" onclick="openOnMobile()">📱 发送到手机</button>
+                </div>
+            </div>
+
+            <!-- 第四步：测试通话 -->
+            <div class="section">
+                <h2>🎬 开始测试通话</h2>
+
+                <h3>电脑端操作：</h3>
+                <ul class="test-list">
+                    <li>在浏览器打开 <code>http://localhost:3000</code></li>
+                    <li>输入房间号，如"test123"</li>
+                    <li>点击"创建房间"按钮</li>
+                    <li>允许摄像头和麦克风权限</li>
+                </ul>
+
+                <h3>手机端操作：</h3>
+                <ul class="test-list">
+                    <li>在浏览器访问上述地址</li>
+                    <li>输入相同的房间号"test123"</li>
+                    <li>点击"加入房间"按钮</li>
+                    <li>允许摄像头和麦克风权限</li>
+                </ul>
+
+                <div class="success-box">
+                    <strong>🎉 连接成功后：</strong>
+                    <ul>
+                        <li>电脑和手机都能看到对方的视频画面</li>
+                        <li>可以听到对方的声音</li>
+                        <li>可以在聊天室发送文字消息</li>
+                        <li>可以测试屏幕共享功能</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 功能测试清单 -->
+            <div class="section">
+                <h2>✅ 功能测试清单</h2>
+
+                <div class="info-box">
+                    <strong>🎥 视频功能：</strong>
+                    <ul>
+                        <li>☐ 电脑摄像头正常显示</li>
+                        <li>☐ 手机摄像头正常显示</li>
+                        <li>☐ 视频画质清晰流畅</li>
+                        <li>☐ 可以开启/关闭摄像头</li>
+                    </ul>
+                </div>
+
+                <div class="info-box">
+                    <strong>🎙️ 音频功能：</strong>
+                    <ul>
+                        <li>☐ 电脑麦克风正常收音</li>
+                        <li>☐ 手机麦克风正常收音</li>
+                        <li>☐ 音质清晰无杂音</li>
+                        <li>☐ 可以开启/关闭麦克风</li>
+                    </ul>
+                </div>
+
+                <div class="info-box">
+                    <strong>💬 聊天功能：</strong>
+                    <ul>
+                        <li>☐ 可以发送文字消息</li>
+                        <li>☐ 消息实时显示</li>
+                        <li>☐ 可以发送表情符号</li>
+                        <li>☐ 可以发送图片</li>
+                    </ul>
+                </div>
+
+                <div class="info-box">
+                    <strong>🖥️ 高级功能：</strong>
+                    <ul>
+                        <li>☐ 屏幕共享功能正常</li>
+                        <li>☐ 文件传输功能正常</li>
+                        <li>☐ AI字幕翻译功能（如配置）</li>
+                        <li>☐ 截图功能正常</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 常见问题 -->
+            <div class="section">
+                <h2>🔧 常见问题解决</h2>
+
+                <div class="faq-item">
+                    <div class="faq-question">
+                        ❓ 手机无法访问网页？
+                        <span>▼</span>
+                    </div>
+                    <div class="faq-answer">
+                        <p>1. 检查手机和电脑是否在同一Wi-Fi网络</p>
+                        <p>2. 确认服务器已启动</p>
+                        <p>3. 检查防火墙是否阻止了3000端口</p>
+                        <p>4. 尝试用其他浏览器访问</p>
+                    </div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">
+                        ❓ 无法获取摄像头/麦克风权限？
+                        <span>▼</span>
+                    </div>
+                    <div class="faq-answer">
+                        <p>1. 检查浏览器权限设置</p>
+                        <p>2. 确认手机系统设置中允许浏览器访问摄像头/麦克风</p>
+                        <p>3. 尝试使用HTTPS协议（如配置了SSL证书）</p>
+                        <p>4. 检查其他应用是否占用了摄像头/麦克风</p>
+                    </div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">
+                        ❓ 视频/音频卡顿？
+                        <span>▼</span>
+                    </div>
+                    <div class="faq-answer">
+                        <p>1. 检查网络连接质量</p>
+                        <p>2. 关闭其他占用带宽的应用</p>
+                        <p>3. 尝试降低视频质量</p>
+                        <p>4. 重启路由器</p>
+                    </div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">
+                        ❓ 看不到对方画面？
+                        <span>▼</span>
+                    </div>
+                    <div class="faq-answer">
+                        <p>1. 确认双方都加入了同一个房间</p>
+                        <p>2. 检查双方是否都开启了摄像头</p>
+                        <p>3. 刷新页面重新连接</p>
+                        <p>4. 查看浏览器控制台的错误信息</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 高级设置 -->
+            <div class="section">
+                <h2>⚙️ 高级配置</h2>
+
+                <h3>服务器配置修改（如需要）：</h3>
+                <p>如果需要修改服务器监听所有网络接口，编辑 <code>server/app.js</code> 文件：</p>
+
+                <div class="code-block">
+                    <code>// 原来的代码
+server.listen(3000, () => {
+    console.log("服务器启动，监听端口 3000");
+});
+
+// 修改为监听所有接口（如果需要）
+server.listen(3000, '0.0.0.0', () => {
+    console.log("服务器启动，监听所有网络接口的 3000 端口");
+});</code>
+                </div>
+
+                <h3>环境设置：</h3>
+                <p>在客户端设置面板（点击⚙️按钮）中：</p>
+                <ul>
+                    <li><strong>服务器地址：</strong>手机端设置为 <code>http://192.168.31.155:3000</code></li>
+                    <li><strong>PeerJS服务器：</strong>设置为 <code>192.168.31.155</code></li>
+                    <li><strong>端口：</strong>设置为 <code>9000</code></li>
+                </ul>
+            </div>
+
+            <!-- 安全提示 -->
+            <div class="section">
+                <h2>🔒 安全提示</h2>
+
+                <div class="warning-box">
+                    <strong>⚠️ 重要提醒：</strong>
+                    <ul>
+                        <li>此配置仅用于本地测试，不要用于生产环境</li>
+                        <li>局域网内其他设备可能访问到您的服务器</li>
+                        <li>不要在公共网络环境下进行敏感通话</li>
+                        <li>生产环境请使用HTTPS和WSS协议</li>
+                        <li>配置适当的防火墙规则和访问控制</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 总结 -->
+            <div class="section">
+                <h2>🎊 测试完成</h2>
+
+                <div class="success-box">
+                    <strong>🎉 恭喜！</strong>
+                    <p>您已成功搭建并测试了WebRTC视频通话系统。</p>
+                    <p>现在您可以：</p>
+                    <ul>
+                        <li>📱 在不同设备间进行视频通话</li>
+                        <li>💬 使用实时聊天功能</li>
+                        <li>🖥️ 测试屏幕共享和文件传输</li>
+                        <li>🌐 根据需要扩展更多功能</li>
+                    </ul>
+                </div>
+
+                <div class="button-group" style="text-align: center; justify-content: center;">
+                    <button class="btn btn-primary" onclick="window.print()">🖨️ 打印教程</button>
+                    <button class="btn btn-success" onclick="restartTutorial()">🔄 重新开始</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 复制到剪贴板功能
+        function copyToClipboard(elementId) {
+            const text = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('已复制到剪贴板：' + text);
+            }).catch(err => {
+                console.error('复制失败:', err);
+                // 备用方案
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textArea);
+                alert('已复制到剪贴板：' + text);
+            });
+        }
+
+        // 测试连接功能
+        function testConnection() {
+            const url = document.getElementById('mobileUrl').innerText;
+            window.open(url, '_blank');
+        }
+
+        // 发送到手机功能
+        function openOnMobile() {
+            const url = document.getElementById('mobileUrl').innerText;
+
+            if (navigator.share) {
+                navigator.share({
+                    title: 'WebRTC测试地址',
+                    text: '请在手机浏览器中打开此地址进行视频通话测试：',
+                    url: url
+                }).then(() => {
+                    console.log('分享成功');
+                }).catch((error) => {
+                    console.log('分享失败:', error);
+                    // 备用方案：复制链接
+                    copyToClipboard('mobileUrl');
+                });
+            } else {
+                // 不支持分享API，直接复制链接
+                copyToClipboard('mobileUrl');
+            }
+        }
+
+        // 重新开始教程
+        function restartTutorial() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // FAQ折叠功能
+        document.querySelectorAll('.faq-question').forEach(item => {
+            item.addEventListener('click', event => {
+                const answer = item.nextElementSibling;
+                const isVisible = answer.style.display === 'block';
+
+                // 关闭所有其他FAQ
+                document.querySelectorAll('.faq-answer').forEach(a => {
+                    a.style.display = 'none';
+                });
+                document.querySelectorAll('.faq-question span').forEach(s => {
+                    s.textContent = '▼';
+                });
+
+                // 切换当前FAQ
+                if (!isVisible) {
+                    answer.style.display = 'block';
+                    item.querySelector('span').textContent = '▲';
+                }
+            });
+        });
+
+        // 页面加载时显示欢迎信息
+        window.addEventListener('load', () => {
+            console.log('WebRTC本地测试教程已加载');
+            console.log('您的本机IP: ' + document.getElementById('localIP').innerText);
+        });
+    </script>
+</body>
+</html>

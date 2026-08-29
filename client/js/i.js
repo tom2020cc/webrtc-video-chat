@@ -2,7 +2,8 @@
 const CONFIG_KEY = "upWebRTCConfig";
 const PRESETS = {
   local: { env: "local", serverUrl: "http://localhost:3000", peerHost: "localhost", peerPort: "9000", secure: false, path: "/peerjs", nickname: "" },
-  prod:  { env: "prod",  serverUrl: "https://www.howfq.icu", peerHost: "www.howfq.icu", peerPort: "", secure: true, path: "/peerjs", nickname: "" },
+  prod:  { env: "prod",  serverUrl: "https://your-domain.com", peerHost: "your-domain.com", peerPort: "", secure: true, path: "/peerjs", nickname: "" },
+  custom: { env: "custom", serverUrl: "http://YOUR_CUSTOM_URL", peerHost: "YOUR_HOST", peerPort: "PORT", secure: false, path: "/peerjs", nickname: "" }
 };
 
 /* ============ 设备信息收集（增强版） ============ */
@@ -77,6 +78,18 @@ function loadConfig() {
   let cfg = {};
   try { cfg = JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch (e) { cfg = {}; }
   const merged = Object.assign({}, PRESETS.local, cfg);
+
+  // 自动检测当前访问地址并更新服务器配置
+  const currentUrl = window.location.origin;
+  const hostname = window.location.hostname;
+
+  // 如果不是localhost，说明是通过IP地址访问的，自动更新配置
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    merged.serverUrl = currentUrl;
+    merged.peerHost = hostname;
+    console.log('检测到非本地访问，自动更新服务器配置为:', currentUrl);
+  }
+
   merged.path = merged.path || "/peerjs";
   if (merged.theme === undefined) merged.theme = "dark";
   if (merged.sound === undefined) merged.sound = true;
@@ -84,11 +97,12 @@ function loadConfig() {
   if (merged.defaultPassword === undefined) merged.defaultPassword = "";
   if (merged.camOn === undefined) merged.camOn = true;
   if (merged.micOn === undefined) merged.micOn = true;
-  // AI配置默认值
-  if (merged.aiEnabled === undefined) merged.aiEnabled = false;
-  if (merged.sttEngine === undefined) merged.sttEngine = "browser";
-  if (merged.translationApi === undefined) merged.translationApi = "openai";
-  if (merged.apiKey === undefined) merged.apiKey = "";
+  // AI配置默认值 - 免费测试配置
+  if (merged.aiEnabled === undefined) merged.aiEnabled = true; // 默认启用AI功能
+  if (merged.sttEngine === undefined) merged.sttEngine = "browser"; // 使用浏览器内置免费语音识别
+  if (merged.translationApi === undefined) merged.translationApi = "openai"; // 翻译服务选择
+  // 默认API密钥配置 - 用户可自行替换为自己的密钥
+  if (merged.apiKey === undefined) merged.apiKey = "sk-demo-key-replace-with-real-key"; // 示例密钥格式
   if (merged.sourceLang === undefined) merged.sourceLang = "auto";
   if (merged.targetLang === undefined) merged.targetLang = "en-US";
   if (merged.subtitlePosition === undefined) merged.subtitlePosition = "bottom";
