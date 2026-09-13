@@ -118,7 +118,7 @@ echo    - 摄像头权限
 echo    - 麦克风权限
 echo.
 echo 4. 详细使用指南请查看:
-echo    - 本地测试指南.md
+echo    - docs\本地测试指南.md
 echo    - README.md
 echo.
 echo ========================================

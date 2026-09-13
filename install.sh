@@ -132,7 +132,7 @@ installation_complete() {
     print_message "${YELLOW}" "   - 麦克风权限"
     echo ""
     print_message "${BLUE}" "4. 详细使用指南请查看:"
-    print_message "${YELLOW}" "   - 本地测试指南.md"
+    print_message "${YELLOW}" "   - docs/本地测试指南.md"
     print_message "${YELLOW}" "   - README.md"
     echo ""
 }
