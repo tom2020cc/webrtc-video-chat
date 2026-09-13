@@ -1,7 +1,7 @@
 /* ============ 环境配置 ============ */
 const CONFIG_KEY = "upWebRTCConfig";
 const PRESETS = {
-  local: { env: "local", serverUrl: "http://localhost:3000", peerHost: "localhost", peerPort: "9000", secure: false, path: "/peerjs", nickname: "" },
+  local: { env: "local", serverUrl: "http://localhost:3000", peerHost: "localhost", peerPort: "3000", secure: false, path: "/peerjs", nickname: "" },
   prod:  { env: "prod",  serverUrl: "https://your-domain.com", peerHost: "your-domain.com", peerPort: "", secure: true, path: "/peerjs", nickname: "" },
   custom: { env: "custom", serverUrl: "http://YOUR_CUSTOM_URL", peerHost: "YOUR_HOST", peerPort: "PORT", secure: false, path: "/peerjs", nickname: "" }
 };
@@ -79,14 +79,24 @@ function loadConfig() {
   try { cfg = JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch (e) { cfg = {}; }
   const merged = Object.assign({}, PRESETS.local, cfg);
 
-  // 自动检测当前访问地址并更新服务器配置
+  // 自动检测当前访问地址并更新服务器配置（PeerJS 与页面同源，反代/隧道只需一个端口）
   const currentUrl = window.location.origin;
   const hostname = window.location.hostname;
+  const pagePort = window.location.port;
+  const isStandardPort = pagePort === "" || pagePort === "80" || pagePort === "443";
 
-  // 如果不是localhost，说明是通过IP地址访问的，自动更新配置
+  // 兼容迁移：旧版 PeerJS 走独立 9000 端口，现改为与页面同源
+  if (merged.peerPort === "9000") {
+    merged.peerPort = isStandardPort ? "" : (pagePort || "3000");
+    console.log('检测到旧版配置（PeerJS 独立端口），已迁移为同源端口:', merged.peerPort || "标准端口");
+  }
+
+  // 如果不是localhost，说明是通过IP/域名访问的，自动更新配置
   if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
     merged.serverUrl = currentUrl;
     merged.peerHost = hostname;
+    merged.peerPort = isStandardPort ? "" : pagePort;
+    merged.secure = window.location.protocol === "https:";
     console.log('检测到非本地访问，自动更新服务器配置为:', currentUrl);
   }
 
@@ -113,6 +123,8 @@ function loadConfig() {
   return merged;
 }
 const config = loadConfig();
+// 挂载到 window 供字幕模块读取（subtitles.js 依赖 window.config 的字幕位置/样式/语言配置）
+window.config = config;
 
 /* ============ DOM 引用 ============ */
 const userNicknameDisplay = document.getElementById("userNickname");
@@ -182,6 +194,7 @@ const cfgCancel = document.getElementById("cfgCancel");
 const cfgClose = document.getElementById("cfgClose");
 const presetLocal = document.getElementById("presetLocal");
 const presetProd = document.getElementById("presetProd");
+const presetCustom = document.getElementById("presetCustom");
 const joinModal = document.getElementById("joinModal");
 const joinRoomName = document.getElementById("joinRoomName");
 const joinPassword = document.getElementById("joinPassword");
@@ -228,6 +241,16 @@ function showNotice(text) {
   t.textContent = text;
   t.classList.add("show");
   setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+/* ============ 安全工具：HTML转义 / 正则转义 ============ */
+function escapeHtml(str) {
+  return String(str == null ? "" : str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /* ============ 音频工具：提示音 + 音量检测 ============ */
@@ -412,6 +435,12 @@ socket.on("chatHistory", ({ roomId, messages }) => {
 
     messages.forEach(msg => {
       const isSubtitle = msg.type === 'subtitle';
+      if (msg.type === 'image') {
+        // 历史图片：先显示占位，再按需向服务器拉取图片数据（图片只存服务器内存）
+        displayImageMessage({ ...msg, imageData: null, pending: true });
+        socket.emit("get-image-data", { messageId: msg.id });
+        return;
+      }
       if (isSubtitle) {
         const subtitleData = {
           originalText: msg.originalText || msg.text,
@@ -509,11 +538,11 @@ socket.on("message-deleted", ({ messageId }) => {
 socket.on("message-edited", ({ messageId, newText, editTime }) => {
   updateMessageInUI(messageId, newText, editTime);
 });
-socket.on("whatsapp-info-shared", (shareData) => {
-  const shareMessage = `${shareData.from} 分享了WhatsApp信息: ${shareData.whatsappDisplayName} - ${shareData.whatsappNumber}`;
-  appendMessage("System", shareMessage, shareData.time, true);
-  showNotice(`收到 ${shareData.from} 的WhatsApp信息`);
-  playTone(660, 0.15, "sine", 0.1);
+socket.on("forward-message-success", ({ targetRoom }) => {
+  showNotice(`消息已转发到房间 ${targetRoom}`);
+});
+socket.on("forward-message-failed", ({ message }) => {
+  showNotice(`转发失败：${message}`);
 });
 socket.on("raiseHand", ({ peerId, nickname, raised }) => {
   if (raised) { raisedHands.add(peerId); showNotice(`${nickname} 举手了 ✋`); playTone(660, 0.18, "sine", 0.1); }
@@ -531,6 +560,12 @@ function initializePeer() {
   peer.on("call", (call) => {
     call.answer(localStream || new MediaStream());
     registerCall(call.peer, call);
+  });
+  // 文件传输的数据通道入口（发送方为每次传输建立专用连接）
+  peer.on("connection", (conn) => {
+    conn.on("data", (data) => handleFileData(conn, data));
+    conn.on("close", () => connTransfers.delete(conn));
+    conn.on("error", () => connTransfers.delete(conn));
   });
   peer.on("error", (err) => {
     console.error("PeerJS 错误：", err);
@@ -750,22 +785,32 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
 
     meta.textContent = `${typeIndicator}${from} · ${formatTime(time)}`;
 
-    // 添加消息操作按钮（仅对自己的消息显示）
-    if (from === config.nickname && messageId) {
+    // 消息操作按钮：所有人可回复/转发，自己的消息还可编辑/删除
+    if (messageId && type === 'text') {
+      const isOwn = from === config.nickname;
       const actionsBtn = document.createElement("span");
       actionsBtn.className = "msg-actions";
       actionsBtn.innerHTML = `
         <button class="action-btn" data-action="reply" title="回复">↩️</button>
-        <button class="action-btn" data-action="delete" title="删除">🗑️</button>
+        <button class="action-btn" data-action="forward" title="转发到其他房间">➦</button>
+        ${isOwn ? `
+        <button class="action-btn" data-action="edit" title="编辑">✏️</button>
+        <button class="action-btn" data-action="delete" title="删除">🗑️</button>` : ""}
       `;
       meta.appendChild(actionsBtn);
 
       // 添加事件监听
       actionsBtn.addEventListener('click', (e) => {
-        if (e.target.dataset.action === 'delete') {
+        const action = e.target.dataset && e.target.dataset.action;
+        if (!action) return;
+        if (action === 'delete') {
           deleteMessage(messageId);
-        } else if (e.target.dataset.action === 'reply') {
+        } else if (action === 'reply') {
           startReply(messageId, text, from);
+        } else if (action === 'edit') {
+          startEdit(messageId, text);
+        } else if (action === 'forward') {
+          forwardMessageToRoom(messageId);
         }
       });
     }
@@ -777,8 +822,8 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
       const replyEl = document.createElement("div");
       replyEl.className = "reply-context";
       replyEl.innerHTML = `
-        <span class="reply-label">↩️ 回复 ${replyTo.from}:</span>
-        <span class="reply-text">${replyTo.text}</span>
+        <span class="reply-label">↩️ 回复 ${escapeHtml(replyTo.from)}:</span>
+        <span class="reply-text">${escapeHtml(replyTo.text)}</span>
       `;
       wrap.appendChild(replyEl);
     }
@@ -788,8 +833,8 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
       const forwardEl = document.createElement("div");
       forwardEl.className = "forward-context";
       forwardEl.innerHTML = `
-        <span class="forward-label">↪️ 转发自 ${forwardFrom.originalFrom} 在房间 ${forwardFrom.originalRoom}:</span>
-        <span class="forward-text">${forwardFrom.originalText}</span>
+        <span class="forward-label">↪️ 转发自 ${escapeHtml(forwardFrom.originalFrom)} 在房间 ${escapeHtml(String(forwardFrom.originalRoom))}:</span>
+        <span class="forward-text">${escapeHtml(forwardFrom.originalText)}</span>
       `;
       wrap.appendChild(forwardEl);
     }
@@ -848,14 +893,15 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// 删除消息
+// 删除消息（管理员在线时附带令牌，可删除他人消息）
 function deleteMessage(messageId) {
   if (!currentRoomId) return;
 
   if (confirm('确定要删除这条消息吗？')) {
     socket.emit('deleteMessage', {
       roomId: currentRoomId,
-      messageId: messageId
+      messageId: messageId,
+      adminToken: (typeof adminToken === "string" && adminToken) ? adminToken : undefined
     });
   }
 }
@@ -864,10 +910,45 @@ function deleteMessage(messageId) {
 function startReply(messageId, text, from) {
   const chatInput = document.getElementById('chatInput');
   chatInput.focus();
+  delete chatInput.dataset.editingId;
   chatInput.dataset.replyingTo = messageId;
   chatInput.dataset.originalText = text;
   chatInput.dataset.originalFrom = from;
   chatInput.placeholder = `回复 ${from}: ${text.substring(0, 30)}...`;
+}
+
+// 清除回复状态
+function clearReplyState() {
+  delete chatInput.dataset.replyingTo;
+  delete chatInput.dataset.originalText;
+  delete chatInput.dataset.originalFrom;
+  chatInput.placeholder = "说点什么…(回车发送)";
+}
+
+// 开始编辑消息（内联到输入框，回车提交，Esc取消）
+function startEdit(messageId, text) {
+  if (!messageId) return;
+  clearReplyState();
+  chatInput.dataset.editingId = messageId;
+  chatInput.value = text || "";
+  chatInput.placeholder = "正在编辑消息…(回车提交，Esc取消)";
+  chatInput.focus();
+}
+
+// 取消编辑
+function cancelEdit() {
+  delete chatInput.dataset.editingId;
+  chatInput.placeholder = "说点什么…(回车发送)";
+}
+
+// 转发消息到其他房间
+function forwardMessageToRoom(messageId) {
+  if (!currentRoomId) { showNotice("请先加入房间"); return; }
+  const target = prompt("输入要转发到的房间号：", "");
+  if (!target || !target.trim()) return;
+  const targetRoomId = target.trim();
+  if (targetRoomId === currentRoomId) { showNotice("目标房间不能是当前房间"); return; }
+  socket.emit("forwardMessage", { sourceRoomId: currentRoomId, messageId, targetRoomId });
 }
 
 // 从UI中移除消息
@@ -886,13 +967,14 @@ function updateMessageInUI(messageId, newText, editTime) {
     if (bubble) {
       bubble.textContent = newText;
       bubble.classList.add('edited');
-
-      // 更新时间显示
-      const metaLine = messageEl.querySelector('.meta-line');
-      if (metaLine) {
-        const timeText = metaLine.childNodes[0].textContent;
-        metaLine.childNodes[0].textContent = timeText + ' (已编辑)';
-      }
+    }
+    // 已编辑标记（只加一次）
+    const metaLine = messageEl.querySelector('.meta-line');
+    if (metaLine && !metaLine.querySelector('.edited-tag')) {
+      const tag = document.createElement("span");
+      tag.className = "edited-tag";
+      tag.textContent = " (已编辑)";
+      metaLine.insertBefore(tag, metaLine.querySelector(".msg-actions"));
     }
   }
 }
@@ -964,6 +1046,9 @@ function leaveRoom() {
 
   // 清理文件传输
   fileTransfers.clear();
+  readyFileSends.clear();
+  incomingFileData.clear();
+  connTransfers.clear();
   hideFileTransferArea();
 
   setRoomState(false);
@@ -1151,13 +1236,17 @@ function renderFileItem(transfer) {
   info.appendChild(name);
   info.appendChild(meta);
 
-  if (transfer.status === "transferring") {
+  if (transfer.status === "transferring" || (transfer.status === "outgoing" && transfer.progress > 0)) {
     const progress = document.createElement("div");
     progress.className = "file-progress";
     const bar = document.createElement("div");
     bar.className = "file-progress-bar";
     bar.style.width = `${transfer.progress || 0}%`;
     progress.appendChild(bar);
+    const pct = document.createElement("span");
+    pct.className = "file-progress-text";
+    pct.textContent = ` ${transfer.progress || 0}%`;
+    progress.appendChild(pct);
     info.appendChild(progress);
   }
 
@@ -1180,15 +1269,32 @@ function renderFileItem(transfer) {
   } else if (transfer.status === "outgoing") {
     const statusSpan = document.createElement("span");
     statusSpan.className = "file-action-btn";
-    statusSpan.textContent = "发送中...";
+    statusSpan.textContent = transfer.progress > 0 ? "传输中..." : "等待对方接收...";
     statusSpan.disabled = true;
     actions.appendChild(statusSpan);
   } else if (transfer.status === "completed") {
-    const doneBtn = document.createElement("button");
+    if (transfer.blob) {
+      // 接收完成的文件：提供另存为
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "file-action-btn primary";
+      saveBtn.textContent = "💾 保存";
+      saveBtn.onclick = () => saveTransferFile(transfer);
+      actions.appendChild(saveBtn);
+    }
+    const doneBtn = document.createElement("span");
     doneBtn.className = "file-action-btn";
     doneBtn.textContent = "已完成";
-    doneBtn.disabled = true;
     actions.appendChild(doneBtn);
+  } else if (transfer.status === "rejected") {
+    const span = document.createElement("span");
+    span.className = "file-action-btn";
+    span.textContent = "对方已拒绝";
+    actions.appendChild(span);
+  } else if (transfer.status === "failed") {
+    const span = document.createElement("span");
+    span.className = "file-action-btn";
+    span.textContent = "传输失败";
+    actions.appendChild(span);
   }
 
   div.appendChild(icon);
@@ -1218,16 +1324,36 @@ function hideFileTransferArea() {
   fileTransferArea.classList.add("hidden");
 }
 
-// 文件发送
+/* ============ 真实文件传输（PeerJS 数据通道） ============
+ * 流程：socket.io 只做 accept/reject 信令，文件字节通过
+ * PeerJS 可靠数据通道分块点对点传输，进度真实可见。
+ */
+const FILE_CHUNK_SIZE = 64 * 1024;             // 每块 64KB
+const FILE_BUFFER_HIGH = 4 * 1024 * 1024;      // 数据通道发送缓冲上限，超过则等待
+const FILE_MAX_SIZE = 200 * 1024 * 1024;       // 单文件上限 200MB
+const readyFileSends = new Map();              // transferId -> File（发送方保留，支持多个接收者）
+const incomingFileData = new Map();            // transferId -> { meta, chunks: [], received }
+const connTransfers = new Map();               // DataConnection -> transferId（接收方归块用）
+
+// 文件发送入口：先发信令征求同意，等对方「接收」后才开始真实传输
 function sendFile(file) {
   if (!currentRoomId) {
     showNotice("请先加入房间");
     return;
   }
+  if (!peer || peer.disconnected) {
+    showNotice("连接未就绪，无法发送文件");
+    return;
+  }
+  if (file.size > FILE_MAX_SIZE) {
+    showNotice(`文件超过上限 ${formatFileSize(FILE_MAX_SIZE)}`);
+    return;
+  }
 
   const transferId = `transfer-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  readyFileSends.set(transferId, file);
 
-  // 通知其他用户有文件要发送
+  // 通知其他用户有文件要发送（对方确认后才开始传输）
   socket.emit("fileSignal", {
     roomId: currentRoomId,
     signal: "offer",
@@ -1252,40 +1378,80 @@ function sendFile(file) {
 
   updateFileTransferUI();
   showFileTransferArea();
-
-  // 模拟文件传输进度（实际应用中需要使用WebRTC数据通道）
-  let progress = 0;
-  const interval = setInterval(() => {
-    progress += Math.random() * 10;
-    if (progress >= 100) {
-      progress = 100;
-      clearInterval(interval);
-
-      const transfer = fileTransfers.get(transferId);
-      if (transfer) {
-        transfer.status = "completed";
-        transfer.progress = 100;
-        updateFileTransferUI();
-        showNotice("文件发送完成");
-      }
-    } else {
-      const transfer = fileTransfers.get(transferId);
-      if (transfer) {
-        transfer.progress = progress;
-        updateFileTransferUI();
-      }
-
-      // 通知进度更新
-      socket.emit("fileProgress", {
-        roomId: currentRoomId,
-        transferId,
-        progress
-      });
-    }
-  }, 500);
+  showNotice("等待对方接收…");
 }
 
-// 文件接收
+// 对方接收后：建立数据通道并分块发送
+function startFileSend(transferId, targetPeerId) {
+  const file = readyFileSends.get(transferId);
+  if (!file) return; // 只有真正的发送方持有文件引用
+
+  let conn;
+  try {
+    conn = peer.connect(targetPeerId, { reliable: true });
+  } catch (e) {
+    console.error("建立文件传输连接失败：", e);
+    markTransferFailed(transferId);
+    return;
+  }
+
+  conn.on("open", () => {
+    const transfer = fileTransfers.get(transferId);
+    conn.send({ kind: "file-meta", id: transferId, name: file.name, size: file.size, type: file.type });
+
+    let offset = 0;
+    let lastProgress = -1;
+    const pump = () => {
+      if (offset >= file.size) {
+        conn.send({ kind: "file-end", id: transferId });
+        if (transfer) { transfer.status = "completed"; transfer.progress = 100; updateFileTransferUI(); }
+        showNotice("文件发送完成");
+        setTimeout(() => { try { conn.close(); } catch (e) {} }, 1000);
+        return;
+      }
+      // 发送缓冲积压时等待，避免内存暴涨
+      const dc = conn.dataChannel;
+      if (dc && dc.bufferedAmount > FILE_BUFFER_HIGH) {
+        setTimeout(pump, 50);
+        return;
+      }
+      const slice = file.slice(offset, offset + FILE_CHUNK_SIZE);
+      slice.arrayBuffer().then((buf) => {
+        conn.send(buf);
+        offset += slice.size;
+        const progress = Math.floor((offset / file.size) * 100);
+        if (transfer && progress !== lastProgress) {
+          lastProgress = progress;
+          transfer.progress = progress;
+          updateFileTransferUI();
+          // 广播进度给房间（接收方按 transferId 匹配更新）
+          socket.emit("fileProgress", { roomId: currentRoomId, transferId, progress });
+        }
+        pump();
+      }).catch((e) => {
+        console.error("文件读取失败：", e);
+        markTransferFailed(transferId);
+        try { conn.close(); } catch (err) {}
+      });
+    };
+    pump();
+  });
+
+  conn.on("error", (err) => {
+    console.error("文件传输连接错误：", err);
+    markTransferFailed(transferId);
+  });
+}
+
+function markTransferFailed(transferId) {
+  const transfer = fileTransfers.get(transferId);
+  if (transfer && transfer.status !== "completed") {
+    transfer.status = "failed";
+    updateFileTransferUI();
+  }
+}
+
+// 文件接收：确认接收，等待发送方打开数据通道
 function acceptFile(transferId) {
   const transfer = fileTransfers.get(transferId);
   if (!transfer) return;
@@ -1294,23 +1460,8 @@ function acceptFile(transferId) {
   transfer.progress = 0;
   updateFileTransferUI();
 
-  // 模拟接收进度
-  let progress = 0;
-  const interval = setInterval(() => {
-    progress += Math.random() * 15;
-    if (progress >= 100) {
-      progress = 100;
-      clearInterval(interval);
-
-      transfer.status = "completed";
-      transfer.progress = 100;
-      updateFileTransferUI();
-      showNotice("文件接收完成");
-    } else {
-      transfer.progress = progress;
-      updateFileTransferUI();
-    }
-  }, 300);
+  socket.emit("fileSignal", { roomId: currentRoomId, signal: "accept", data: { transferId } });
+  showNotice("已接受，正在建立传输通道…");
 }
 
 function rejectFile(transferId) {
@@ -1318,16 +1469,78 @@ function rejectFile(transferId) {
   if (!transfer) return;
 
   fileTransfers.delete(transferId);
+  incomingFileData.delete(transferId);
   updateFileTransferUI();
 
   if (fileTransfers.size === 0) {
     hideFileTransferArea();
   }
 
+  socket.emit("fileSignal", { roomId: currentRoomId, signal: "reject", data: { transferId } });
   showNotice("已拒绝文件接收");
 }
 
-// 处理文件信号
+// 数据通道数据入口：区分元数据 / 结束标记 / 二进制块
+function handleFileData(conn, data) {
+  if (data && typeof data === "object" && data.kind === "file-meta") {
+    incomingFileData.set(data.id, { meta: data, chunks: [], received: 0 });
+    connTransfers.set(conn, data.id);
+    return;
+  }
+  if (data && typeof data === "object" && data.kind === "file-end") {
+    finishFileReceive(data.id);
+    connTransfers.delete(conn);
+    return;
+  }
+  // 二进制块（同一连接只承载一个传输）
+  const transferId = connTransfers.get(conn);
+  const entry = transferId && incomingFileData.get(transferId);
+  if (!entry) return;
+  const buf = data instanceof ArrayBuffer ? data : (data && data.buffer instanceof ArrayBuffer ? data.buffer : null);
+  if (!buf) return;
+  entry.chunks.push(buf);
+  entry.received += buf.byteLength || 0;
+  const transfer = fileTransfers.get(transferId);
+  if (transfer && entry.meta.size > 0) {
+    const progress = Math.min(99, Math.floor((entry.received / entry.meta.size) * 100));
+    transfer.progress = Math.max(transfer.progress || 0, progress);
+    updateFileTransferUI();
+  }
+}
+
+// 接收完成：组装 Blob，等待用户点「保存」
+function finishFileReceive(transferId) {
+  const entry = incomingFileData.get(transferId);
+  if (!entry) return;
+  incomingFileData.delete(transferId);
+
+  const blob = new Blob(entry.chunks, { type: entry.meta.type || "application/octet-stream" });
+  const transfer = fileTransfers.get(transferId);
+  if (transfer) {
+    transfer.status = "completed";
+    transfer.progress = 100;
+    transfer.blob = blob;
+    updateFileTransferUI();
+  }
+  showNotice(`文件 ${entry.meta.name} 接收完成，请点击「保存」`);
+  playTone(660, 0.15, "sine", 0.1);
+}
+
+// 另存为接收到的文件
+function saveTransferFile(transfer) {
+  if (!transfer || !transfer.blob) return;
+  const url = URL.createObjectURL(transfer.blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = transfer.name || "file";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  showNotice("文件已保存");
+}
+
+// 处理文件信令
 socket.on("fileSignal", ({ from, peerId, signal, data }) => {
   if (signal === "offer") {
     const transferId = data.id;
@@ -1349,13 +1562,23 @@ socket.on("fileSignal", ({ from, peerId, signal, data }) => {
     showNotice(`${from || data.from} 想要发送文件：${data.name}`);
 
     playTone(440, 0.1, "sine", 0.08);
+  } else if (signal === "accept") {
+    // 我是该文件的发送方：向接受者发起点对点传输
+    if (data.transferId && peerId) startFileSend(data.transferId, peerId);
+  } else if (signal === "reject") {
+    const transfer = fileTransfers.get(data.transferId);
+    if (transfer && transfer.status === "outgoing") {
+      transfer.status = "rejected";
+      updateFileTransferUI();
+      showNotice(`${from} 拒绝了文件 ${transfer.name}`);
+    }
   }
 });
 
-// 处理文件传输进度
+// 处理文件传输进度（发送方广播，双方同步显示）
 socket.on("fileProgress", ({ fromPeerId, transferId, progress }) => {
   const transfer = fileTransfers.get(transferId);
-  if (transfer) {
+  if (transfer && transfer.status !== "completed") {
     transfer.progress = progress;
     if (progress >= 100) {
       transfer.status = "completed";
@@ -1394,6 +1617,7 @@ function closeSettings() { settingsModal.classList.add("hidden"); }
 function updatePresetActive() {
   presetLocal.classList.toggle("active", config.env === "local");
   presetProd.classList.toggle("active", config.env === "prod");
+  if (presetCustom) presetCustom.classList.toggle("active", config.env === "custom");
 }
 function syncPasswordField() {
   const on = cfgRequirePassword.checked;
@@ -1481,31 +1705,34 @@ function displaySubtitleHistory() {
     const searchTerm = subtitleSearchInput.value.toLowerCase();
     const originalText = highlightSearchTerm(item.originalText || '', searchTerm);
     const translatedText = highlightSearchTerm(item.translatedText || '', searchTerm);
+    const speaker = escapeHtml(item.from || item.speaker || '未知用户');
+    const langs = `${escapeHtml(item.sourceLang || 'auto')} → ${escapeHtml(item.targetLang || 'en')}`;
 
     return `
-      <div class="subtitle-history-item" data-id="${item.id}">
+      <div class="subtitle-history-item" data-id="${escapeHtml(String(item.id))}">
         <div class="subtitle-history-header">
-          <span class="subtitle-history-speaker">${item.from || item.speaker || '未知用户'}</span>
-          <span class="subtitle-history-time">${time}</span>
+          <span class="subtitle-history-speaker">${speaker}</span>
+          <span class="subtitle-history-time">${escapeHtml(time)}</span>
         </div>
         <div class="subtitle-history-content">
           <div class="subtitle-history-original">${originalText}</div>
           ${translatedText ? `<div class="subtitle-history-translated">${translatedText}</div>` : ''}
         </div>
         <div class="subtitle-history-langs">
-          <span class="lang-badge">${item.sourceLang || 'auto'} → ${item.targetLang || 'en'}</span>
+          <span class="lang-badge">${langs}</span>
         </div>
       </div>
     `;
   }).join('');
 }
 
-// 高亮搜索词
+// 高亮搜索词（先转义HTML再高亮，搜索词做正则转义防止注入）
 function highlightSearchTerm(text, searchTerm) {
-  if (!searchTerm || !text) return text;
+  const safe = escapeHtml(text);
+  if (!searchTerm || !safe) return safe;
 
-  const regex = new RegExp(`(${searchTerm})`, 'gi');
-  return text.replace(regex, '<span class="highlight">$1</span>');
+  const regex = new RegExp(`(${escapeRegExp(searchTerm)})`, 'gi');
+  return safe.replace(regex, '<span class="highlight">$1</span>');
 }
 
 // 搜索字幕
@@ -1798,7 +2025,7 @@ imageInput.addEventListener("change", (e) => {
   }
 });
 
-// 发送图片功能
+// 发送图片功能（图片数据经 socket.io 传输，服务器内存暂存支持历史恢复）
 function sendImage(file) {
   // 检查文件大小（1MB限制）
   const maxSize = 1 * 1024 * 1024; // 1MB
@@ -1829,20 +2056,18 @@ function sendImage(file) {
       id: Date.now() + Math.random()
     };
 
-    // 通过DataChannel发送图片（如果有Peer连接）
-    sendImageToPeers(imageMessage);
-
-    // 也在本地显示
+    // 在本地显示
     displayImageMessage(imageMessage);
 
-    // 通知服务器
+    // 发送到服务器（含图片数据，由服务器转发并存入内存暂存）
     socket.emit('image-message', {
       roomId: currentRoomId,
       imageInfo: {
+        imageData: imageData,
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type,
-        time: Date.now()
+        time: imageMessage.time
       }
     });
 
@@ -1856,27 +2081,7 @@ function sendImage(file) {
   reader.readAsDataURL(file);
 }
 
-// 通过DataChannel发送图片给Peers
-function sendImageToPeers(imageMessage) {
-  // 这里可以通过WebRTC DataChannel发送图片
-  // 目前简化处理，主要通过socket.io信号传输
-  Object.values(peerConnections).forEach(conn => {
-    if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
-      try {
-        // 将imageData转换为字符串传输
-        const dataStr = JSON.stringify({
-          type: 'image',
-          data: imageMessage
-        });
-        conn.dataChannel.send(dataStr);
-      } catch (e) {
-        console.error("发送图片失败:", e);
-      }
-    }
-  });
-}
-
-// 显示图片消息
+// 显示图片消息（imageData 可能为空：等待按需加载或已过期）
 function displayImageMessage(message) {
   const wrap = document.createElement("div");
   wrap.className = "msg" + (message.from === config.nickname ? " mine" : "") + " image";
@@ -1890,29 +2095,38 @@ function displayImageMessage(message) {
   imageContainer.className = "image-container";
 
   const img = document.createElement("img");
-  img.src = message.imageData;
   img.alt = message.fileName || "图片";
+
+  if (message.imageData) {
+    img.src = message.imageData;
+  } else {
+    // 历史图片：数据待服务器返回；过期则提示
+    img.dataset.pending = "true";
+    img.classList.add("image-loading");
+    img.title = "图片加载中…";
+  }
 
   // 点击图片预览
   img.addEventListener('click', () => {
-    openImagePreview(message.imageData);
+    if (img.src) openImagePreview(img.src);
   });
 
   const imageInfo = document.createElement("div");
   imageInfo.className = "image-info";
 
-  const sizeText = formatFileSize(message.fileSize);
+  const sizeText = formatFileSize(message.fileSize || 0);
   imageInfo.innerHTML = `
-    <span>${message.fileName || "image"} (${sizeText})</span>
+    <span>${escapeHtml(message.fileName || "image")} (${sizeText})</span>
     <div class="image-actions">
-      <button class="image-action-btn" data-action="download" data-url="${message.imageData}" data-name="${message.fileName || "image"}">⬇️ 下载</button>
+      <button class="image-action-btn">⬇️ 下载</button>
     </div>
   `;
 
   // 下载按钮功能
   const downloadBtn = imageInfo.querySelector('.image-action-btn');
   downloadBtn.addEventListener('click', () => {
-    downloadImage(message.imageData, message.fileName || "image");
+    if (!img.src) { showNotice("图片尚未加载"); return; }
+    downloadImage(img.src, message.fileName || "image");
   });
 
   imageContainer.appendChild(img);
@@ -1924,6 +2138,35 @@ function displayImageMessage(message) {
   chatMessages.appendChild(wrap);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
+
+// 历史图片数据返回：填充占位图
+socket.on("image-data-response", ({ messageId, imageData }) => {
+  if (!imageData) {
+    // 图片已过期（服务器只保留最近50张/1小时）
+    const el = chatMessages.querySelector(`[data-message-id="${messageId}"]`);
+    if (el) {
+      const img = el.querySelector("img");
+      if (img && img.dataset.pending) {
+        delete img.dataset.pending;
+        img.classList.remove("image-loading");
+        img.replaceWith(Object.assign(document.createElement("div"), {
+          className: "image-expired",
+          textContent: "🖼️ 图片已过期"
+        }));
+      }
+    }
+    return;
+  }
+  const el = chatMessages.querySelector(`[data-message-id="${messageId}"]`);
+  if (el) {
+    const img = el.querySelector("img");
+    if (img && img.dataset.pending) {
+      img.src = imageData;
+      delete img.dataset.pending;
+      img.classList.remove("image-loading");
+    }
+  }
+});
 
 // 打开图片预览
 function openImagePreview(imageUrl) {
@@ -1968,15 +2211,6 @@ function downloadImage(imageUrl, fileName) {
   showNotice("开始下载图片");
 }
 
-// 格式化文件大小
-function formatFileSize(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
 fileInput.addEventListener("change", (e) => {
   const files = e.target.files;
   if (files && files.length > 0) {
@@ -2004,6 +2238,7 @@ cfgClose.addEventListener("click", closeSettings);
 cfgCancel.addEventListener("click", closeSettings);
 presetLocal.addEventListener("click", () => applyPreset("local"));
 presetProd.addEventListener("click", () => applyPreset("prod"));
+if (presetCustom) presetCustom.addEventListener("click", () => applyPreset("custom"));
 cfgRequirePassword.addEventListener("change", syncPasswordField);
 
 cfgSave.addEventListener("click", () => {
@@ -2034,10 +2269,20 @@ cfgSave.addEventListener("click", () => {
   config.autoClearSubtitle = cfgAutoClearSubtitle ? cfgAutoClearSubtitle.checked : true;
   config.env = /localhost|127\.0\.0\.1/.test(config.peerHost + config.serverUrl) ? "local" : "prod";
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  // window.config 与 config 是同一引用，字幕模块可即时读到新配置
 
   // 如果昵称改变且在房间内，通知服务器
   if (nicknameChanged && currentRoomId) {
     updateNickname(newNickname);
+  }
+
+  // 已初始化的字幕模块即时应用新配置（语言/位置/样式）
+  if (window.Subtitles && window.Subtitles.manager) {
+    try {
+      window.Subtitles.manager.updateLanguage(config.sourceLang, config.targetLang);
+      window.Subtitles.manager.updateSubtitlePosition();
+      window.Subtitles.manager.updateSubtitleStyle();
+    } catch (e) { console.warn("应用字幕配置失败：", e); }
   }
 
   closeSettings();
@@ -2049,6 +2294,15 @@ chatForm.addEventListener("submit", (e) => {
   const text = chatInput.value.trim();
   if (!text) return;
   if (!currentRoomId) { showNotice("请先加入房间"); return; }
+
+  // 编辑模式：提交编辑并复位
+  const editingId = chatInput.dataset.editingId;
+  if (editingId) {
+    socket.emit("editMessage", { roomId: currentRoomId, messageId: editingId, newText: text });
+    cancelEdit();
+    chatInput.value = "";
+    return;
+  }
 
   // 检查是否是回复消息
   const replyToId = chatInput.dataset.replyingTo;
@@ -2069,16 +2323,24 @@ chatForm.addEventListener("submit", (e) => {
     });
 
     // 清除回复状态
-    delete chatInput.dataset.replyingTo;
-    delete chatInput.dataset.originalText;
-    delete chatInput.dataset.originalFrom;
-    chatInput.placeholder = "说点什么…(回车发送)";
+    clearReplyState();
   } else {
     // 发送普通消息
     socket.emit("chatMessage", { roomId: currentRoomId, text });
   }
 
   chatInput.value = "";
+});
+
+// Esc 取消编辑 / 回复
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (chatInput.dataset.editingId) {
+    cancelEdit();
+    chatInput.value = "";
+  } else if (chatInput.dataset.replyingTo) {
+    clearReplyState();
+  }
 });
 
 // 键盘快捷键（在输入框内不触发）
@@ -2110,10 +2372,70 @@ let isAdmin = false;
 let adminToken = null;
 let currentAdminSession = null;
 
-// 管理员登录按钮
+// 管理员按钮：已登录则打开管理面板，否则打开登录弹窗
 document.getElementById("adminLoginBtn").addEventListener("click", () => {
-  document.getElementById("adminLoginModal").classList.remove("hidden");
-  document.getElementById("adminPassword").focus();
+  if (isAdmin && adminToken) {
+    document.getElementById("adminPanelModal").classList.remove("hidden");
+    requestAdminLogs();
+  } else {
+    document.getElementById("adminLoginModal").classList.remove("hidden");
+    document.getElementById("adminPassword").focus();
+  }
+});
+
+// 管理面板关闭
+document.getElementById("adminPanelClose").addEventListener("click", () => {
+  document.getElementById("adminPanelModal").classList.add("hidden");
+});
+
+// 管理面板：清除房间
+document.getElementById("adminClearRoomBtn").addEventListener("click", () => {
+  const roomId = (document.getElementById("adminClearRoomId").value || "").trim() || currentRoomId;
+  if (!roomId) { showNotice("请输入要清除的房间号"); return; }
+  if (!confirm(`确定要清除房间 ${roomId} 吗？房间内所有人将被移出，聊天记录将被删除。`)) return;
+  socket.emit("admin-clear-room", { roomId, token: adminToken, reason: "管理员在面板中执行" });
+});
+
+// 管理面板：请求操作日志
+function requestAdminLogs() {
+  if (!isAdmin || !adminToken) return;
+  socket.emit("admin-get-logs", { token: adminToken, limit: 50 });
+}
+document.getElementById("adminRefreshLogsBtn").addEventListener("click", requestAdminLogs);
+
+// 管理面板：渲染操作日志
+socket.on("admin-logs-response", ({ logs }) => {
+  const list = document.getElementById("adminLogsList");
+  if (!logs || logs.length === 0) {
+    list.innerHTML = '<div class="admin-log-empty">暂无日志</div>';
+    return;
+  }
+  list.innerHTML = logs.map((log) => {
+    const time = new Date(log.timestamp).toLocaleString();
+    let detail = log.details;
+    if (detail && typeof detail === "object") {
+      try { detail = JSON.stringify(detail); } catch (e) { detail = String(detail); }
+    }
+    return `
+      <div class="admin-log-item">
+        <span class="admin-log-time">${escapeHtml(time)}</span>
+        <span class="admin-log-action">${escapeHtml(log.action || "")}</span>
+        <span class="admin-log-detail">${escapeHtml(String(detail || ""))}</span>
+      </div>
+    `;
+  }).join("");
+});
+
+// 房间被管理员清除：提示 + 强制离开由 force-leave-room 处理
+socket.on("room-cleared-by-admin", ({ reason }) => {
+  showNotice(`房间已被管理员清除：${reason || "管理员操作"}`);
+  playTone(220, 0.3, "sine", 0.12);
+});
+
+// 被强制移出房间：复位界面
+socket.on("force-leave-room", () => {
+  if (currentRoomId) leaveRoom();
+  showNotice("您已被管理员移出房间");
 });
 
 // 管理员登录表单
@@ -2242,12 +2564,12 @@ socket.on("whatsapp-info-shared", (shareData) => {
   const contactInfo = shareData.whatsappInfo;
   const message = `
     <div class="whatsapp-share">
-      <div class="share-header">📱 ${shareData.from} 分享了WhatsApp联系信息</div>
+      <div class="share-header">📱 ${escapeHtml(shareData.from)} 分享了WhatsApp联系信息</div>
       <div class="share-content">
-        <strong>${contactInfo.displayName}</strong><br>
-        ${contactInfo.number}
+        <strong>${escapeHtml(contactInfo.displayName)}</strong><br>
+        ${escapeHtml(contactInfo.number)}
       </div>
-      <button class="whatsapp-chat-btn" data-number="${contactInfo.number}" data-name="${contactInfo.displayName}">
+      <button class="whatsapp-chat-btn">
         💬 一键聊天
       </button>
     </div>
@@ -2258,11 +2580,12 @@ socket.on("whatsapp-info-shared", (shareData) => {
   wrap.className = "msg whatsapp";
   wrap.innerHTML = message;
 
-  // 添加一键聊天功能
+  // 添加一键聊天功能（通过闭包取值，避免数据进入HTML属性）
   const chatBtn = wrap.querySelector('.whatsapp-chat-btn');
   if (chatBtn) {
     chatBtn.addEventListener('click', () => {
-      const whatsappNumber = contactInfo.number.replace(/\D/g, '');
+      const whatsappNumber = String(contactInfo.number || '').replace(/\D/g, '');
+      if (!whatsappNumber) { showNotice("该用户未提供有效的WhatsApp号码"); return; }
       const whatsappLink = `https://wa.me/${whatsappNumber}`;
       window.open(whatsappLink, '_blank');
       showNotice(`正在打开WhatsApp与 ${contactInfo.displayName} 对话`);
@@ -2271,6 +2594,8 @@ socket.on("whatsapp-info-shared", (shareData) => {
 
   chatMessages.appendChild(wrap);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+  showNotice(`收到 ${shareData.from} 的WhatsApp信息`);
+  playTone(660, 0.15, "sine", 0.1);
 });
 
 // 管理员操作结果监听

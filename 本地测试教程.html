@@ -560,8 +560,7 @@ server.listen(3000, '0.0.0.0', () => {
                 <p>在客户端设置面板（点击⚙️按钮）中：</p>
                 <ul>
                     <li><strong>服务器地址：</strong>手机端设置为 <code>http://192.168.31.155:3000</code></li>
-                    <li><strong>PeerJS服务器：</strong>设置为 <code>192.168.31.155</code></li>
-                    <li><strong>端口：</strong>设置为 <code>9000</code></li>
+                    <li><strong>PeerJS服务器：</strong>与页面同源自动适配，保持默认即可（信令挂载在 <code>/peerjs</code> 路径，与页面共用 3000 端口）</li>
                 </ul>
             </div>
 

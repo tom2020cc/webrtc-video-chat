@@ -1,25 +1,18 @@
 {
-  "db9c909d2ddc5509": {
-    "nickname": "用户222",
-    "browserId": "bid_1787759312475_v47efscmn2l",
+  "db9c909d8e8f1ab7": {
+    "nickname": "用户3001",
+    "browserId": "bid_1788021627523_e0xpi0qtoje",
     "preferences": {},
-    "createdAt": 1787759312677,
-    "lastSeen": 1787759312677,
+    "createdAt": 1788021627718,
+    "lastSeen": 1788021627718,
     "fingerprintHistory": []
   },
-  "84d4e7311b5bf057": {
-    "nickname": "用户9876",
-    "preferences": {},
-    "createdAt": 1787759319978,
-    "lastSeen": 1787759319978,
-    "fingerprintHistory": []
-  },
-  "9cad9dfc2b703374": {
+  "cfbc8e8e881a9cf9": {
     "nickname": "用户9876",
     "browserId": "bid_1787759321512_2gct4b5r0wh",
     "preferences": {},
     "createdAt": 1787759321533,
-    "lastSeen": 1787760924440,
+    "lastSeen": 1788023355344,
     "fingerprintHistory": [
       {
         "old": "9cad9dfc2ff438a7",
@@ -37,6 +30,48 @@
         "old": "9cad9dfc2ff438a7",
         "new": "9cad9dfc2b703374",
         "timestamp": 1787760924440,
+        "reason": "IP或其他特征变化"
+      },
+      {
+        "old": "9cad9dfc2b703374",
+        "new": "cfbc8e8e2ff438a7",
+        "timestamp": 1788018964959,
+        "reason": "IP或其他特征变化"
+      },
+      {
+        "old": "cfbc8e8e2ff438a7",
+        "new": "cfbc8e8e881a9cf9",
+        "timestamp": 1788023355344,
+        "reason": "IP或其他特征变化"
+      }
+    ]
+  },
+  "f8fb12ce8ad5e3ec": {
+    "nickname": "用户9110",
+    "browserId": "bid_1788022054665_44txfb58sg1",
+    "preferences": {},
+    "createdAt": 1788022409793,
+    "lastSeen": 1788023477290,
+    "fingerprintHistory": [
+      {
+        "old": "f8fb12cef2d578d8",
+        "new": "f8fb12ce8ad5e3ec",
+        "timestamp": 1788023477290,
+        "reason": "IP或其他特征变化"
+      }
+    ]
+  },
+  "db9c909d49509b48": {
+    "nickname": "用户222",
+    "browserId": "bid_1787759312475_v47efscmn2l",
+    "preferences": {},
+    "createdAt": 1787759312677,
+    "lastSeen": 1788023549413,
+    "fingerprintHistory": [
+      {
+        "old": "db9c909d2ddc5509",
+        "new": "db9c909d49509b48",
+        "timestamp": 1788023549413,
         "reason": "IP或其他特征变化"
       }
     ]

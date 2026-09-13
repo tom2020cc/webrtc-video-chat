@@ -10,7 +10,8 @@
     "clean": "rimraf node_modules",
     "reinstall": "npm run clean && npm install",
     "check-node": "node -v && npm -v",
-    "prestart": "npm run check-node"
+    "prestart": "npm run check-node",
+    "smoke-test": "node scripts/smoke-test.js"
   },
   "keywords": [
     "webrtc",

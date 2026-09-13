@@ -1306,3 +1306,87 @@ button { font-family: inherit; }
   .ctrl-btn { min-width: 60px; padding: 8px 10px; }
   .room-controls input { min-width: 100%; }
 }
+
+/* ============ 文件进度文本 / 图片占位 / 已编辑标记 ============ */
+.file-progress-text {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  vertical-align: middle;
+}
+
+.image-expired {
+  padding: 18px 24px;
+  background: var(--panel-2);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.edited-tag {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* ============ 管理面板 ============ */
+.danger-btn {
+  background: var(--danger);
+  border: none;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.danger-btn:hover {
+  opacity: 0.85;
+}
+
+.admin-logs-list {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 6px;
+}
+
+.admin-log-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+
+.admin-log-item:last-child {
+  border-bottom: none;
+}
+
+.admin-log-time {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.admin-log-action {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.admin-log-detail {
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.admin-log-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}

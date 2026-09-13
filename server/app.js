@@ -3,7 +3,7 @@ const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 const cors = require("cors");
-const { PeerServer } = require("peer");
+const { ExpressPeerServer } = require("peer");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -12,8 +12,51 @@ const crypto = require("crypto");
 const ADMIN_CONFIG = {
   password: "admin123", // 管理员密码
   allowedIPs: ["127.0.0.1", "::1", "localhost"], // 允许的管理员IP
-  secretKey: "webRTC_admin_secret_2024" // 管理员操作密钥
+  secretKey: "webRTC_admin_secret_2024", // 管理员操作密钥
+  sessionDuration: 30 * 60 * 1000, // 会话时长：30分钟
+  features: ["clear-room", "delete-message", "view-logs", "view-devices"] // 可用功能
 };
+
+// 本地IP集合（用于免外部查询/管理员校验）
+const LOCAL_IPS = new Set(["127.0.0.1", "::1", "localhost", "unknown"]);
+
+// 规范化IP：x-forwarded-for 可能是逗号分隔列表；IPv4映射地址去掉 ::ffff: 前缀
+function normalizeIp(rawIp) {
+  if (!rawIp) return "unknown";
+  let ip = String(rawIp).split(",")[0].trim();
+  if (ip.startsWith("::ffff:")) ip = ip.substring(7);
+  return ip || "unknown";
+}
+
+// 管理员密码验证（密码 + IP 白名单）
+function authenticateAdmin(password, ip) {
+  const normalizedIp = normalizeIp(ip);
+  if (!ADMIN_CONFIG.allowedIPs.includes(normalizedIp) && !ADMIN_CONFIG.allowedIPs.includes(ip)) {
+    return { success: false, message: "当前IP不在管理员白名单内" };
+  }
+  if (String(password) !== ADMIN_CONFIG.password) {
+    return { success: false, message: "管理员密码错误" };
+  }
+  return { success: true, message: "管理员登录成功" };
+}
+
+// 生成管理员会话令牌
+function generateAdminToken() {
+  return crypto.createHmac("sha256", ADMIN_CONFIG.secretKey)
+    .update(uuidv4() + "|" + Date.now() + "|" + Math.random())
+    .digest("hex");
+}
+
+// 验证管理员令牌（存在且未过期，过期自动清除）
+function verifyAdminToken(token) {
+  if (!token || !adminTokens.has(token)) return false;
+  const session = adminTokens.get(token);
+  if (Date.now() > session.expires) {
+    adminTokens.delete(token);
+    return false;
+  }
+  return true;
+}
 
 const app = express();
 app.use(cors()); // 配置 CORS，允许来自任意源的请求
@@ -23,8 +66,24 @@ app.get("/", (req, res) => { res.sendFile(path.join(__dirname, "..", "client", "
 app.get("/hi", (req, res) => { res.send("<h1>Hello Dear</h1>"); });
 
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] } }); // 创建 Socket.IO 实例
-const peerServer = PeerServer({ port: 9000, path: "/peerjs" }); // 配置 PeerJS 服务器
+// maxHttpBufferSize 提升到 5MB，以支持最大 1MB 的图片 base64 消息（base64 约有 4/3 膨胀）
+const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] }, maxHttpBufferSize: 5 * 1024 * 1024 }); // 创建 Socket.IO 实例
+// 单端口模式：PeerJS 信令挂载到同一 HTTP 服务的 /peerjs 路径（与页面同源，反代/隧道只需一个端口）
+// 注意：ExpressPeerServer 会接管其收到 server 上的所有 upgrade 事件，与 Socket.IO 的
+// WebSocket 冲突，因此给它挂一个不监听端口的内部服务器，由主服务器把 /peerjs 的
+// upgrade 请求转发过去，两者互不干扰。
+const peerInnerServer = http.createServer();
+const peerServer = ExpressPeerServer(peerInnerServer, { debug: false });
+app.use("/peerjs", peerServer); // 客户端路径 = /peerjs + 内置 peerjs 前缀 = /peerjs/peerjs/...
+
+server.on("upgrade", (req, socket, head) => {
+  const pathname = (req.url || "").split("?")[0];
+  if (pathname === "/peerjs" || pathname.startsWith("/peerjs/")) {
+    peerInnerServer.emit("upgrade", req, socket, head);
+  }
+});
+
+peerServer.on("error", (err) => console.error("PeerJS 服务错误：", err));
 
 // 数据存储
 let rooms = {}; // 房间信息：roomId -> { users: [{socketId, peerId, nickname}], password }
@@ -40,6 +99,21 @@ const USER_SOCIAL_FILE = path.join(DATA_DIR, "user-social.json");
 const ROOM_METADATA_FILE = path.join(DATA_DIR, "room-metadata.json");
 const ADMIN_LOGS_FILE = path.join(DATA_DIR, "admin-logs.json");
 let adminLogs = []; // 管理员操作日志
+const imageStore = new Map(); // 图片内存暂存：messageId -> {roomId, imageData, ...}，不持久化
+
+// 清理图片暂存：最多保留50张、且只保留1小时内的图片
+function trimImageStore() {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const now = Date.now();
+  for (const [id, img] of imageStore) {
+    if (now - img.time > ONE_HOUR) imageStore.delete(id);
+  }
+  if (imageStore.size > 50) {
+    const excess = imageStore.size - 50;
+    const oldestIds = [...imageStore.keys()].slice(0, excess);
+    oldestIds.forEach((id) => imageStore.delete(id));
+  }
+}
 
 // 确保数据目录存在
 if (!fs.existsSync(DATA_DIR)) {
@@ -219,7 +293,7 @@ function getIpLocation(ip) {
     }
 
     // 本地IP直接返回
-    if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") {
+    if (LOCAL_IPS.has(ip)) {
       const localData = {
         country: "本地",
         countryEmoji: "🏠",
@@ -322,11 +396,12 @@ io.on("connection", async (socket) => {
   const clientInfo = socket.handshake.auth || {};
   const peerId = uuidv4();
 
-  // 获取真实IP地址（考虑代理）
-  const clientIp = socket.handshake.headers["x-forwarded-for"] ||
-                   socket.handshake.headers["x-real-ip"] ||
-                   socket.handshake.address ||
-                   "unknown";
+  // 获取真实IP地址（考虑代理；取 x-forwarded-for 首个IP并去掉 ::ffff: 前缀）
+  const clientIp = normalizeIp(
+    socket.handshake.headers["x-forwarded-for"] ||
+    socket.handshake.headers["x-real-ip"] ||
+    socket.handshake.address
+  );
 
   // 管理员相关变量
   let isAdmin = false;
@@ -766,15 +841,21 @@ io.on("connection", async (socket) => {
     socket.emit("edit-message-success", { message: "消息已编辑", messageId });
   });
 
-  // 转发消息到另一个房间
+  // 转发消息到另一个房间（需在源房间内；目标房间存在即可，带密码的房间需是成员）
   socket.on("forwardMessage", ({ sourceRoomId, messageId, targetRoomId }) => {
     if (!rooms[sourceRoomId] || !rooms[targetRoomId]) {
       socket.emit("forward-message-failed", { message: "房间不存在" });
       return;
     }
 
-    if (!socket.rooms.has(sourceRoomId) || !socket.rooms.has(targetRoomId)) {
-      socket.emit("forward-message-failed", { message: "需要同时是源房间和目标房间的成员" });
+    if (!socket.rooms.has(sourceRoomId)) {
+      socket.emit("forward-message-failed", { message: "需要是源房间的成员" });
+      return;
+    }
+
+    // 带密码的房间：非成员不允许向其转发内容
+    if (rooms[targetRoomId].password && !socket.rooms.has(targetRoomId)) {
+      socket.emit("forward-message-failed", { message: "目标房间受密码保护" });
       return;
     }
 
@@ -926,14 +1007,18 @@ io.on("connection", async (socket) => {
     });
   });
 
-  // 图片消息处理
+  // 图片消息处理：图片数据走内存暂存（不写入磁盘），聊天历史只存元数据
   socket.on("image-message", ({ roomId, imageInfo }) => {
     if (!rooms[roomId] || !socket.rooms.has(roomId)) {
       socket.emit("image-error", { message: "房间访问权限不足" });
       return;
     }
+    if (!imageInfo || typeof imageInfo.imageData !== "string") {
+      socket.emit("image-error", { message: "图片数据无效" });
+      return;
+    }
 
-    // 创建图片消息记录（不包含实际图片数据，只包含元数据）
+    // 创建图片消息记录（聊天历史只包含元数据）
     const imageMessage = {
       id: Date.now() + Math.random(),
       type: 'image',
@@ -953,33 +1038,39 @@ io.on("connection", async (socket) => {
     chatHistory[roomId].push(imageMessage);
     saveChatHistory();
 
-    // 转发图片消息给房间内其他用户
-    socket.to(roomId).emit("image-message", imageMessage);
+    // 图片数据放入内存暂存，供历史记录恢复
+    imageStore.set(imageMessage.id, {
+      roomId,
+      from: socket.data.nickname,
+      imageData: imageInfo.imageData,
+      fileName: imageInfo.fileName,
+      fileSize: imageInfo.fileSize,
+      fileType: imageInfo.fileType,
+      time: imageMessage.time
+    });
+    trimImageStore();
+
+    // 全量转发图片（含数据）给房间内其他用户
+    socket.to(roomId).emit("image-message", { ...imageMessage, imageData: imageInfo.imageData });
 
     console.log(`用户 ${socket.data.nickname} 在房间 ${roomId} 发送了图片: ${imageInfo.fileName}`);
   });
 
-  // 获取图片消息详情（用于历史记录恢复）
-  socket.on("get-image-message", ({ roomId, messageId }) => {
-    if (!chatHistory[roomId]) {
-      socket.emit("image-error", { message: "聊天记录不存在" });
+  // 拉取历史图片数据（客户端加载聊天历史后按需请求）
+  socket.on("get-image-data", ({ messageId }) => {
+    const img = imageStore.get(messageId);
+    if (!img) {
+      socket.emit("image-data-response", { messageId, imageData: null });
       return;
     }
-
-    const message = chatHistory[roomId].find(msg => msg.id === messageId);
-    if (message && message.type === 'image') {
-      // 这里可以返回图片的元数据信息
-      socket.emit("image-message-details", {
-        messageId,
-        fileName: message.fileName,
-        fileSize: message.fileSize,
-        fileType: message.fileType,
-        from: message.from,
-        time: message.time
-      });
-    } else {
-      socket.emit("image-error", { message: "图片消息不存在" });
-    }
+    socket.emit("image-data-response", {
+      messageId,
+      imageData: img.imageData,
+      fileName: img.fileName,
+      fileSize: img.fileSize,
+      fileType: img.fileType,
+      from: img.from
+    });
   });
 
   // 清空聊天历史
@@ -995,6 +1086,7 @@ io.on("connection", async (socket) => {
   socket.on("updateNickname", ({ nickname }) => {
     if (nickname && nickname.trim()) {
       const newNickname = nickname.trim();
+      const oldNickname = socket.data.nickname;
       socket.data.nickname = newNickname;
 
       // 更新设备配置
@@ -1008,10 +1100,16 @@ io.on("connection", async (socket) => {
         saveUserProfiles();
       }
 
+      // 同步房间成员列表里的昵称
+      Object.values(rooms).forEach((room) => {
+        const member = room.users.find((u) => u.socketId === socket.id);
+        if (member) member.nickname = newNickname;
+      });
+
       // 通知当前房间的其他用户
       socket.rooms.forEach((roomId) => {
         if (rooms[roomId] && roomId !== socket.id) {
-          systemMessage(roomId, `${socket.data.nickname} 更新了昵称为 ${newNickname}`);
+          systemMessage(roomId, `${oldNickname} 更新了昵称为 ${newNickname}`);
           broadcastRoomUpdate(roomId);
         }
       });
@@ -1039,10 +1137,10 @@ io.on("connection", async (socket) => {
     }
   });
 
-  // 文件传输状态更新
-  socket.on("fileProgress", ({ roomId, fromPeerId, progress }) => {
+  // 文件传输状态更新（透传 transferId，否则接收方无法匹配进度到具体文件）
+  socket.on("fileProgress", ({ roomId, fromPeerId, transferId, progress }) => {
     if (rooms[roomId]) {
-      io.to(roomId).emit("fileProgress", { fromPeerId, progress });
+      io.to(roomId).emit("fileProgress", { fromPeerId, transferId, progress });
     }
   });
 
@@ -1070,8 +1168,7 @@ io.on("connection", async (socket) => {
   // 管理员功能：获取所有设备信息（需要权限验证）
   socket.on("getAllDevices", () => {
     // 简单的权限检查：只有在本地环境的客户端才能查看
-    const isLocal = socket.handshake.address === "127.0.0.1" ||
-                    socket.handshake.address === "::1" ||
+    const isLocal = LOCAL_IPS.has(clientIp) ||
                     clientInfo.serverUrl?.includes("localhost");
 
     if (isLocal) {
