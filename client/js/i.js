@@ -2,7 +2,7 @@
 const CONFIG_KEY = "upWebRTCConfig";
 const PRESETS = {
   local: { env: "local", serverUrl: "http://localhost:3000", peerHost: "localhost", peerPort: "3000", secure: false, path: "/peerjs", nickname: "" },
-  prod:  { env: "prod",  serverUrl: "https://your-domain.com", peerHost: "your-domain.com", peerPort: "", secure: true, path: "/peerjs", nickname: "" },
+  prod:  { env: "prod",  serverUrl: "https://video.shanbo-rig.com", peerHost: "video.shanbo-rig.com", peerPort: "443", secure: true, path: "/peerjs", nickname: "" },
   custom: { env: "custom", serverUrl: "http://YOUR_CUSTOM_URL", peerHost: "YOUR_HOST", peerPort: "PORT", secure: false, path: "/peerjs", nickname: "" }
 };
 
@@ -109,11 +109,10 @@ function loadConfig() {
   if (merged.micOn === undefined) merged.micOn = true;
   // AI配置默认值 - 免费测试配置
   if (merged.aiEnabled === undefined) merged.aiEnabled = true; // 默认启用AI功能
-  if (merged.sttEngine === undefined) merged.sttEngine = "browser"; // 使用浏览器内置免费语音识别
-  if (merged.translationApi === undefined) merged.translationApi = "openai"; // 翻译服务选择
-  // 默认API密钥配置 - 用户可自行替换为自己的密钥
-  if (merged.apiKey === undefined) merged.apiKey = "sk-demo-key-replace-with-real-key"; // 示例密钥格式
-  if (merged.sourceLang === undefined) merged.sourceLang = "auto";
+  merged.sttEngine = "browser";
+  if (!['deepseek','none'].includes(merged.translationApi)) merged.translationApi = "deepseek";
+  delete merged.apiKey;
+  if (!merged.sourceLang || merged.sourceLang === 'auto') merged.sourceLang = "zh-CN";
   if (merged.targetLang === undefined) merged.targetLang = "en-US";
   if (merged.subtitlePosition === undefined) merged.subtitlePosition = "bottom";
   if (!merged.nickname) {
@@ -182,7 +181,6 @@ const cfgMicOn = document.getElementById("cfgMicOn");
 const cfgAiEnabled = document.getElementById("cfgAiEnabled");
 const cfgSttEngine = document.getElementById("cfgSttEngine");
 const cfgTranslationApi = document.getElementById("cfgTranslationApi");
-const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgSourceLang = document.getElementById("cfgSourceLang");
 const cfgTargetLang = document.getElementById("cfgTargetLang");
 const cfgSubtitlePosition = document.getElementById("cfgSubtitlePosition");
@@ -208,6 +206,9 @@ let peer = null;
 let userPeerId = null;        // 当前用户 PeerID
 let localStream = null;       // 本地视频流
 let currentRoomId = null;     // 当前房间号
+let pendingRoomRequest = null;
+let roomRequestVersion = 0;
+let roomSyncPending = false;
 let currentUsers = [];        // 当前房间成员列表
 let chatMessagesData = {};    // 聊天消息数据存储 (按房间ID分组)
 let screenStream = null;      // 屏幕共享流
@@ -360,6 +361,7 @@ window.socket = socket;
 userNicknameDisplay.textContent = config.nickname;
 
 socket.on("connect_error", () => {
+  setConnectionStatus('连接失败，请检查网络');
   showNotice("无法连接服务器，请在「设置」中检查环境配置");
 });
 
@@ -367,7 +369,6 @@ socket.on("peerId", (peerId) => {
   userPeerId = peerId;
   userPeerIdDisplay.textContent = peerId;
   initializePeer();
-  initLocalStream();
 });
 
 // 用户信息响应（可能包含服务器端恢复的昵称）
@@ -481,28 +482,86 @@ socket.on("theRoomPasswordWrong", (msg) => {
 });
 
 // 房间列表（含是否有密码）
-socket.on("roomList", (list) => {
+let lobbyRooms=[];
+function renderRoomLobby(){
   roomListEl.innerHTML = "";
-  if (!list || list.length === 0) {
-    roomListEl.innerHTML = '<span class="room-empty">暂无房间</span>';
+  document.getElementById('lobbyRoomCount').textContent=lobbyRooms.length+' 个房间';
+  if (!lobbyRooms.length) {
+    roomListEl.innerHTML = '<span class="room-empty">大厅暂无房间，可以创建第一个房间</span>';
     return;
   }
-  list.forEach((room) => {
+  lobbyRooms.forEach((room) => {
+    const card=document.createElement('div');card.className='lobby-room';
+    const label=document.createElement('span');label.className='lobby-room-state';
+    label.textContent=room.count>=2?'已满员':room.count?'通话中 · 可加入':'空闲 · 房间保留';
     const btn = document.createElement("button");
     btn.className = "room-btn";
-    btn.textContent = (room.hasPassword ? "🔒 " : "") + `进入 ${room.id}`;
+    btn.textContent = (room.hasPassword ? "🔒 " : "") + (room.id===currentRoomId?'当前房间 ':'进入 ') + room.id;
     btn.addEventListener("click", () => openJoinModal(room.id));
-    roomListEl.appendChild(btn);
+    btn.textContent += `（${room.count||0}/2）`;
+    btn.disabled = room.count >= 2 || Boolean(currentRoomId) || !socket.connected;
+    card.appendChild(btn);card.appendChild(label);
+    if(isAdmin&&adminToken){const del=document.createElement('button');del.className='lobby-delete';del.textContent='删除房间';del.setAttribute('aria-label','删除房间 '+room.id);del.onclick=()=>deleteRoomAsAdmin(room.id);card.appendChild(del);}
+    roomListEl.appendChild(card);
   });
+}
+socket.on("roomList", (list) => {
+  if(!socket.connected)return;
+  lobbyRooms=Array.isArray(list)?list:[];renderRoomLobby();
 });
 
-socket.on("roomUpdate", (users) => {
-  currentUsers = users;
-  renderMembers();
-  updateVideoPeers(users);
+function applyRoomState(state){
+  if(!state||state.roomId!==currentRoomId||!currentRoomId)return;
+  if(!state.users.some(u=>u.socketId===socket.id)){leaveRoom(false);showNotice('服务器已将你移出房间');return;}
+  currentUsers=state.users;renderMembers();updateVideoPeers(state.users);
+}
+socket.on('roomState',applyRoomState);
+socket.on('roomLeft',({roomId})=>{if(currentRoomId===roomId)leaveRoom(false);});
+socket.on('roomFull',msg=>{leaveRoom(false);showNotice(msg);});
+socket.on('roomRejected',msg=>{leaveRoom(false);showNotice(msg);});
+socket.on('roomJoined',({roomId,requestId})=>{
+  if(!pendingRoomRequest||pendingRoomRequest.requestId!==requestId||pendingRoomRequest.roomId!==roomId){
+    if(currentRoomId!==roomId&&socket.connected)socket.volatile.emit('leaveRoom',roomId);
+    return;
+  }
+  currentRoomId=roomId;window.currentRoomId=roomId;
+  currentRoomIdDisplay.textContent=roomId;chatMessages.innerHTML='';
+  roomIdInput.value='';roomPasswordInput.value='';setRoomState(true);
 });
+function setConnectionStatus(text) {const el=document.getElementById('connectionStatus');if(el)el.textContent=text;}
+socket.on('connect',()=>{createRoomBtn.disabled=false;setConnectionStatus('已连接 · 每房最多2人');});
+socket.on('disconnect',()=>{
+  const wasInRoom=Boolean(currentRoomId||pendingRoomRequest);
+  leaveRoom(false);socket.sendBuffer=[];
+  isAdmin=false;adminToken=null;lobbyRooms=[];
+  document.getElementById('lobbyRoomCount').textContent='离线';
+  document.getElementById('adminLoginBtn').textContent='🔐';
+  document.getElementById('adminPanelModal').classList.add('hidden');
+  roomListEl.innerHTML='<span class="room-empty">连接恢复后更新房间列表</span>';
+  createRoomBtn.disabled=true;closeJoinModal();
+  if(peer){try{peer.destroy();}catch{}peer=null;}
+  userPeerIdDisplay.textContent='未连接';setConnectionStatus('连接已断开，已退出房间');
+  if(wasInRoom)showNotice('连接中断，已自动退出。网络恢复后请重新加入房间');
+});
+window.addEventListener('offline',()=>{leaveRoom(false);socket.disconnect();roomListEl.innerHTML='<span class="room-empty">设备离线，无法获取在线房间</span>';createRoomBtn.disabled=true;closeJoinModal();setConnectionStatus('设备离线，已退出房间');});
+window.addEventListener('online',()=>{setConnectionStatus('网络恢复，正在连接大厅…');socket.connect();});
+function syncRoomState(){
+  if(!socket.connected||pendingRoomRequest||roomSyncPending)return;
+  roomSyncPending=true;const connectionId=socket.id,room=currentRoomId;
+  socket.timeout(4000).emit('roomSync',(error,state)=>{
+    roomSyncPending=false;
+    if(socket.id!==connectionId||currentRoomId!==room)return;
+    if(error){leaveRoom(false);socket.disconnect();if(navigator.onLine!==false)socket.connect();return;}
+    if(!room&&state?.roomId){socket.volatile.emit('leaveRoom',state.roomId);return;}
+    if(room&&state?.roomId!==room){leaveRoom(false);showNotice('房间状态已失效，已自动退出');return;}
+    applyRoomState(state);
+  });
+}
+setInterval(syncRoomState,5000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncRoomState();});
 
 socket.on("chatMessage", (data) => {
+  if(!currentRoomId)return;
   const { from, text, time, id, replyTo, forwardFrom, type } = data;
 
   // 存储聊天消息数据
@@ -520,6 +579,7 @@ socket.on("chatMessage", (data) => {
       targetLang: data.targetLang || 'en-US'
     };
     appendMessage(from, JSON.stringify(subtitleData), time, false, id, replyTo, forwardFrom, type);
+    if(data.senderId!==socket.id)window.MediaUI?.receive(data);
   } else {
     // 普通消息处理
     appendMessage(from, text, time, false, id, replyTo, forwardFrom, type);
@@ -552,12 +612,19 @@ socket.on("raiseHand", ({ peerId, nickname, raised }) => {
 
 /* ============ Peer 初始化 ============ */
 function initializePeer() {
-  const opts = { host: config.peerHost, path: config.path, secure: config.secure };
-  if (config.peerPort && config.peerPort !== "") opts.port = parseInt(config.peerPort, 10);
+  if(peer){try{peer.destroy();}catch{}peer=null;}
+  // PeerJS 默认使用云端口 443；HTTP 标准端口也必须明确传入 80。
+  const opts = {
+    host: config.peerHost,
+    path: config.path,
+    secure: config.secure,
+    port: config.peerPort ? parseInt(config.peerPort, 10) : (config.secure ? 443 : 80)
+  };
 
   peer = new Peer(userPeerId, opts);
 
   peer.on("call", (call) => {
+    if(!currentRoomId||!currentUsers.some(u=>u.peerId===call.peer)){call.close();return;}
     call.answer(localStream || new MediaStream());
     registerCall(call.peer, call);
   });
@@ -571,7 +638,7 @@ function initializePeer() {
     console.error("PeerJS 错误：", err);
     showNotice("信令连接出错：" + (err.type || "未知错误"));
   });
-  peer.on("disconnected", () => { try { peer.reconnect(); } catch (e) {} });
+  peer.on("disconnected", () => {if(currentRoomId){leaveRoom();showNotice('音视频信令已断开，已退出房间');}try { peer?.reconnect(); } catch (e) {} });
 }
 
 /* ============ 媒体：本地/远程视频 ============ */
@@ -581,8 +648,15 @@ function removePlaceholder() {
 }
 
 async function initLocalStream() {
+  const requestVersion=roomRequestVersion;
+  if (config.camOn === false && config.micOn === false) {
+    isMuted = true; isCameraOff = true;
+    syncControlButtons(); initSubtitleModule(); return;
+  }
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    if(requestVersion!==roomRequestVersion||!socket.connected){stream.getTracks().forEach(t=>t.stop());return;}
+    localStream = stream;
     if (config.micOn === false && localStream.getAudioTracks()[0]) {
       localStream.getAudioTracks()[0].enabled = false;
       isMuted = true;
@@ -680,6 +754,7 @@ function displayRemoteVideo(peerId, stream) {
     videoContainer.appendChild(tile);
   }
   tile.querySelector("video").srcObject = stream;
+  window.MediaUI?.play(tile.querySelector("video"),tile);
   tile.querySelector(".label").textContent = memberNames.get(peerId) || peerId;
   attachAnalyser(peerId, stream);
 }
@@ -700,6 +775,8 @@ function registerCall(peerId, call) {
 }
 
 function updateVideoPeers(users) {
+  const present=new Set(users.map(u=>u.peerId));
+  calls.forEach((call,id)=>{if(!present.has(id)){try{call.close();}catch{}calls.delete(id);removeRemoteVideo(id);}});
   if (!localStream) return;
   users.forEach((user) => {
     if (user.peerId !== userPeerId && userPeerId < user.peerId && !calls.has(user.peerId)) {
@@ -858,6 +935,7 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
       const originalDiv = document.createElement("div");
       originalDiv.className = "subtitle-original";
       originalDiv.textContent = subtitleData.originalText || text;
+      bubble.appendChild(originalDiv);
 
       // 显示译文（如果有）
       if (subtitleData.translatedText) {
@@ -866,8 +944,6 @@ function appendMessage(from, text, time, isSystem, messageId = null, replyTo = n
         translatedDiv.textContent = subtitleData.translatedText;
         bubble.appendChild(translatedDiv);
       }
-
-      bubble.appendChild(originalDiv);
 
       // 添加语言标签
       if (subtitleData.sourceLang || subtitleData.targetLang) {
@@ -983,7 +1059,8 @@ function updateMessageInUI(messageId, newText, editTime) {
 function setRoomState(inRoom) {
   roomControls.classList.toggle("hidden", inRoom);
   inRoomChip.classList.toggle("hidden", !inRoom);
-  roomListEl.classList.toggle("hidden", inRoom);
+  roomListEl.classList.remove("hidden");
+  if(socket.connected)renderRoomLobby();
   hangupBtn.disabled = !inRoom;
   chatSendBtn.disabled = !inRoom;
   raiseHandBtn.disabled = !inRoom;
@@ -993,11 +1070,24 @@ function setRoomState(inRoom) {
 }
 
 function resetRoomUI() {
-  currentRoomId = null;
-  window.currentRoomId = currentRoomId; // 同步到window对象
-  currentRoomIdDisplay.textContent = "未加入房间";
+  leaveRoom(false);
   roomIdInput.value = "";
-  setRoomState(false);
+}
+
+async function enterRoom(event,roomId,password){
+  if(currentRoomId||pendingRoomRequest){showNotice('请先退出当前房间，或等待加入完成');return;}
+  if(!socket.connected){showNotice('尚未连接服务器，请稍后再加入');return;}
+  const requestId=String(++roomRequestVersion);
+  pendingRoomRequest={roomId,requestId};createRoomBtn.disabled=true;setConnectionStatus('正在加入房间…');
+  if(!localStream)await initLocalStream();
+  if(pendingRoomRequest?.requestId!==requestId||!socket.connected)return;
+  socket.timeout(8000).emit(event,{roomId,password,requestId},(error,result)=>{
+    if(pendingRoomRequest?.requestId!==requestId)return;
+    pendingRoomRequest=null;createRoomBtn.disabled=false;
+    if(error){leaveRoom();socket.disconnect();if(navigator.onLine!==false)socket.connect();showNotice('加入超时，已取消，请重新加入');return;}
+    if(!result?.ok){leaveRoom(false);setConnectionStatus('已连接 · 每房最多2人');showNotice(result?.error||'加入失败');return;}
+    setConnectionStatus('房间已连接 · 每房最多2人');
+  });
 }
 
 createRoomBtn.addEventListener("click", async () => {
@@ -1008,29 +1098,20 @@ createRoomBtn.addEventListener("click", async () => {
     if (!password) password = config.defaultPassword || "";
     if (!password) { alert("请在设置中填写默认密码，或在此输入房间密码"); return; }
   }
-  if (!localStream) await initLocalStream();
-  socket.emit("createRoom", { roomId, password });
-  currentRoomId = roomId;
-  window.currentRoomId = currentRoomId; // 同步到window对象
-  currentRoomIdDisplay.textContent = roomId;
-  roomIdInput.value = "";
-  roomPasswordInput.value = "";
-  setRoomState(true);
+  await enterRoom('createRoom',roomId,password);
 });
 
 async function doJoinRoom(roomId, password) {
   if (currentRoomId) { alert("请先离开当前房间"); return; }
-  if (!localStream) await initLocalStream();
-  socket.emit("joinRoom", { roomId, password });
-  currentRoomId = roomId;
-  window.currentRoomId = currentRoomId; // 同步到window对象
-  currentRoomIdDisplay.textContent = roomId;
-  setRoomState(true);
+  await enterRoom('joinRoom',roomId,password);
 }
 
-function leaveRoom() {
-  if (!currentRoomId) return;
-  socket.emit("leaveRoom", currentRoomId);
+function leaveRoom(notifyServer=true) {
+  const leavingRoom=currentRoomId||pendingRoomRequest?.roomId;
+  roomRequestVersion++;pendingRoomRequest=null;createRoomBtn.disabled=false;
+  window.Subtitles?.stop();
+  window.MediaUI?.clearCaption();
+  if(notifyServer&&socket.connected&&leavingRoom)socket.volatile.emit('leaveRoom',leavingRoom);
   currentRoomId = null;
   window.currentRoomId = currentRoomId; // 同步到window对象
   currentRoomIdDisplay.textContent = "未加入房间";
@@ -1041,6 +1122,7 @@ function leaveRoom() {
   handRaised = false;
   raiseHandBtn.classList.remove("on");
   currentUsers = [];
+  chatMessages.innerHTML='';
   renderMembers();
   analysers.clear();
 
@@ -1052,6 +1134,8 @@ function leaveRoom() {
   hideFileTransferArea();
 
   setRoomState(false);
+  createRoomBtn.disabled=!socket.connected;
+  setConnectionStatus(socket.connected?'已连接 · 每房最多2人':'连接已断开，已退出房间');
 }
 
 function stopLocalStream() {
@@ -1094,7 +1178,7 @@ function syncControlButtons() {
 }
 
 function toggleMute() {
-  if (!localStream) return;
+  if (!localStream) {showNotice('当前为旁观模式，请在设置中开启麦克风，保存后刷新并重新加入房间');return;}
   const track = localStream.getAudioTracks()[0];
   if (!track) return;
   track.enabled = !track.enabled;
@@ -1103,7 +1187,7 @@ function toggleMute() {
 }
 
 function toggleCamera() {
-  if (!localStream) return;
+  if (!localStream) {showNotice('当前为旁观模式，请在设置中开启摄像头，保存后刷新并重新加入房间');return;}
   const track = localStream.getVideoTracks()[0];
   if (!track) return;
   track.enabled = !track.enabled;
@@ -1600,9 +1684,11 @@ function openSettings() {
   // AI配置回填
   cfgAiEnabled.checked = !!config.aiEnabled;
   cfgSttEngine.value = config.sttEngine || "browser";
-  cfgTranslationApi.value = config.translationApi || "openai";
-  cfgApiKey.value = config.apiKey || "";
-  cfgSourceLang.value = config.sourceLang || "auto";
+  cfgTranslationApi.value = config.translationApi || "deepseek";
+  cfgSourceLang.value = config.sourceLang || "zh-CN";
+  const statusEl = document.getElementById('translationServiceStatus');
+  statusEl.textContent = '正在检查翻译服务…';
+  window.Subtitles.status().then(s => {statusEl.textContent = s.configured ? 'DeepSeek 已配置，密钥由服务器保管。' : 'DeepSeek 尚未配置，当前只能识别原文。';}).catch(() => {statusEl.textContent='翻译服务连接暂不可用';});
   cfgTargetLang.value = config.targetLang || "en-US";
   cfgSubtitlePosition.value = config.subtitlePosition || "bottom";
   // 恢复字幕样式配置
@@ -1948,9 +2034,7 @@ function toggleSubtitles() {
       return;
     }
 
-    window.Subtitles.start();
-    subtitleBtn.classList.add("on");
-    showNotice("字幕功能已开启");
+    if (window.Subtitles.start()) showNotice("字幕已开启，请按设置中的源语言说话");
   }
 
   syncSubtitleButton();
@@ -2241,6 +2325,24 @@ presetProd.addEventListener("click", () => applyPreset("prod"));
 if (presetCustom) presetCustom.addEventListener("click", () => applyPreset("custom"));
 cfgRequirePassword.addEventListener("change", syncPasswordField);
 
+document.getElementById('translationTestBtn').addEventListener('click', async () => {
+  const button = document.getElementById('translationTestBtn');
+  const output = document.getElementById('translationTestResult');
+  const text = document.getElementById('translationTestInput').value.trim();
+  if (!text) {output.textContent='请先输入要翻译的文字';return;}
+  if (cfgTranslationApi.value === 'none' || config.translationApi === 'none') {output.textContent='请先选择 DeepSeek 并保存设置';return;}
+  const roomId = currentRoomId;
+  const sourceLang = cfgSourceLang.value, targetLang = cfgTargetLang.value;
+  button.disabled = true; output.textContent = '正在翻译…';
+  try {
+    const translation = await window.Subtitles.translateText(text,sourceLang,targetLang,roomId);
+    if (roomId !== currentRoomId) {output.textContent='已离开房间，翻译已取消';return;}
+    output.textContent = translation || '源语言与目标语言相同，无需翻译';
+    if (translation) socket.emit('subtitleMessage',{roomId,originalText:text,translatedText:translation,sourceLang,targetLang});
+  } catch(error) {output.textContent=error.message;}
+  finally {button.disabled=false;}
+});
+
 cfgSave.addEventListener("click", () => {
   const newNickname = cfgNickname.value.trim() || "匿名用户";
   const nicknameChanged = newNickname !== config.nickname;
@@ -2259,7 +2361,7 @@ cfgSave.addEventListener("click", () => {
   config.aiEnabled = cfgAiEnabled.checked;
   config.sttEngine = cfgSttEngine.value;
   config.translationApi = cfgTranslationApi.value;
-  config.apiKey = cfgApiKey.value.trim();
+  delete config.apiKey;
   config.sourceLang = cfgSourceLang.value;
   config.targetLang = cfgTargetLang.value;
   config.subtitlePosition = cfgSubtitlePosition.value;
@@ -2363,9 +2465,8 @@ document.querySelectorAll(".modal").forEach((m) => {
 });
 
 // 页面关闭时清理
-window.addEventListener("beforeunload", () => {
-  if (currentRoomId) socket.emit("leaveRoom", currentRoomId);
-});
+window.addEventListener('pagehide',()=>{leaveRoom();socket.disconnect();});
+window.addEventListener('pageshow',event=>{if(event.persisted){leaveRoom(false);socket.connect();}});
 
 /* ============ 管理员和WhatsApp功能 ============ */
 let isAdmin = false;
@@ -2389,11 +2490,16 @@ document.getElementById("adminPanelClose").addEventListener("click", () => {
 });
 
 // 管理面板：清除房间
+document.getElementById('lobbyAdminBtn').addEventListener('click',()=>document.getElementById('adminLoginBtn').click());
+function deleteRoomAsAdmin(roomId){
+  if(!isAdmin||!adminToken){showNotice('只有管理员可以删除房间');return;}
+  if(!confirm(`确定删除房间 ${roomId} 吗？所有成员将退出，房间及聊天记录将被删除。`))return;
+  socket.emit('admin-clear-room',{roomId,token:adminToken,reason:'管理员从大厅删除房间'});
+}
 document.getElementById("adminClearRoomBtn").addEventListener("click", () => {
   const roomId = (document.getElementById("adminClearRoomId").value || "").trim() || currentRoomId;
   if (!roomId) { showNotice("请输入要清除的房间号"); return; }
-  if (!confirm(`确定要清除房间 ${roomId} 吗？房间内所有人将被移出，聊天记录将被删除。`)) return;
-  socket.emit("admin-clear-room", { roomId, token: adminToken, reason: "管理员在面板中执行" });
+  deleteRoomAsAdmin(roomId);
 });
 
 // 管理面板：请求操作日志
@@ -2465,6 +2571,7 @@ socket.on("admin-login-success", ({ token, message, sessionInfo }) => {
   isAdmin = true;
   adminToken = token;
   currentAdminSession = sessionInfo;
+  renderRoomLobby();
 
   document.getElementById("adminLoginModal").classList.add("hidden");
   document.getElementById("adminPassword").value = "";

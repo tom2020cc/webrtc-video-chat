@@ -7,15 +7,23 @@ const { ExpressPeerServer } = require("peer");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const crypto = require("crypto");
+const {createTranslator, attachTranslation} = require('./translation');
+const translator = createTranslator();
+const {attachRooms} = require('./rooms');
+const {loadRooms,saveRooms}=require('./room-store');
 
 // 管理员配置
 const ADMIN_CONFIG = {
-  password: "admin123", // 管理员密码
-  allowedIPs: ["127.0.0.1", "::1", "localhost"], // 允许的管理员IP
-  secretKey: "webRTC_admin_secret_2024", // 管理员操作密钥
+  password: process.env.ADMIN_PASSWORD || "admin123",
+  allowedIPs: (process.env.ADMIN_ALLOWED_IPS || "127.0.0.1,::1,localhost").split(",").map(ip => ip.trim()),
+  secretKey: process.env.ADMIN_SECRET || crypto.randomBytes(32).toString("hex"),
   sessionDuration: 30 * 60 * 1000, // 会话时长：30分钟
   features: ["clear-room", "delete-message", "view-logs", "view-devices"] // 可用功能
 };
+
+if (process.env.NODE_ENV === "production" && !process.env.ADMIN_PASSWORD) {
+  throw new Error("Production requires ADMIN_PASSWORD");
+}
 
 // 本地IP集合（用于免外部查询/管理员校验）
 const LOCAL_IPS = new Set(["127.0.0.1", "::1", "localhost", "unknown"]);
@@ -67,7 +75,7 @@ app.get("/hi", (req, res) => { res.send("<h1>Hello Dear</h1>"); });
 
 const server = http.createServer(app);
 // maxHttpBufferSize 提升到 5MB，以支持最大 1MB 的图片 base64 消息（base64 约有 4/3 膨胀）
-const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] }, maxHttpBufferSize: 5 * 1024 * 1024 }); // 创建 Socket.IO 实例
+const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] }, pingInterval:5000, pingTimeout:10000, maxHttpBufferSize: 5 * 1024 * 1024 }); // 失联通常在15秒内清理
 // 单端口模式：PeerJS 信令挂载到同一 HTTP 服务的 /peerjs 路径（与页面同源，反代/隧道只需一个端口）
 // 注意：ExpressPeerServer 会接管其收到 server 上的所有 upgrade 事件，与 Socket.IO 的
 // WebSocket 冲突，因此给它挂一个不监听端口的内部服务器，由主服务器把 /peerjs 的
@@ -86,18 +94,19 @@ server.on("upgrade", (req, socket, head) => {
 peerServer.on("error", (err) => console.error("PeerJS 服务错误：", err));
 
 // 数据存储
-let rooms = {}; // 房间信息：roomId -> { users: [{socketId, peerId, nickname}], password }
+let rooms = Object.create(null); // 房间信息：roomId -> { users: [{socketId, peerId, nickname}], password }
 let chatHistory = {}; // 聊天记录：roomId -> [{from, text, time, isSystem, messageType}]
 let userProfiles = new Map(); // 用户配置：deviceId -> {nickname, preferences}
 let userSocialLinks = new Map(); // 用户社交链接：deviceId -> {whatsapp, telegram, etc}
 let roomMetadata = {}; // 房间元数据：roomId -> {createdAt, createdBy, messageCount, lastActivity}
 let adminTokens = new Map(); // 管理员会话令牌：token -> {ip, socketId, createdAt, expires, nickname}
-const DATA_DIR = path.join(__dirname, "..", "data");
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
 const CHAT_HISTORY_FILE = path.join(DATA_DIR, "chat-history.json");
 const USER_PROFILES_FILE = path.join(DATA_DIR, "user-profiles.json");
 const USER_SOCIAL_FILE = path.join(DATA_DIR, "user-social.json");
 const ROOM_METADATA_FILE = path.join(DATA_DIR, "room-metadata.json");
 const ADMIN_LOGS_FILE = path.join(DATA_DIR, "admin-logs.json");
+const ROOM_REGISTRY_FILE=path.join(DATA_DIR,'rooms.json');
 let adminLogs = []; // 管理员操作日志
 const imageStore = new Map(); // 图片内存暂存：messageId -> {roomId, imageData, ...}，不持久化
 
@@ -248,6 +257,7 @@ function generateBrowserId(info) {
 
 // 启动时加载数据
 loadPersistedData();
+rooms=loadRooms(ROOM_REGISTRY_FILE);
 
 // IP地理位置缓存
 const ipGeoCache = new Map();
@@ -385,16 +395,23 @@ loadIpGeoCache();
 
 // 房间列表（携带是否有密码，供前端显示 🔒）
 function roomListPayload() {
-  return Object.entries(rooms).map(([id, r]) => ({ id, hasPassword: !!r.password }));
+  return Object.entries(rooms).map(([id, r]) => ({ id, hasPassword: !!r.password, count:r.users.length, capacity:2 }));
 }
 function broadcastRoomList() { io.emit("roomList", roomListPayload()); }
-function broadcastRoomUpdate(roomId) { if (rooms[roomId]) io.to(roomId).emit("roomUpdate", rooms[roomId].users); }
+function broadcastRoomUpdate(roomId) {
+  if(rooms[roomId]){
+    io.to(roomId).emit('roomState',{roomId,users:rooms[roomId].users,capacity:2});
+    io.to(roomId).emit('roomUpdate',rooms[roomId].users); // 兼容尚未刷新的客户端
+  }
+}
 function systemMessage(roomId, text) { io.to(roomId).emit("systemMessage", { text, time: Date.now() }); }
 
 io.on("connection", async (socket) => {
+  attachTranslation(socket, {translator, isMember: roomId => Boolean(rooms[roomId] && socket.rooms.has(roomId))});
   // 获取客户端信息
   const clientInfo = socket.handshake.auth || {};
   const peerId = uuidv4();
+  attachRooms(socket,{rooms,io,identity:()=>({peerId,nickname:socket.data.nickname||clientInfo.nickname||'匿名用户'}),broadcastList:broadcastRoomList,broadcastUpdate:broadcastRoomUpdate,systemMessage,history:id=>chatHistory[id],persist:()=>saveRooms(ROOM_REGISTRY_FILE,rooms)});
 
   // 获取真实IP地址（考虑代理；取 x-forwarded-for 首个IP并去掉 ::ffff: 前缀）
   const clientIp = normalizeIp(
@@ -492,6 +509,11 @@ io.on("connection", async (socket) => {
   }
 
   socket.data.nickname = nickname;
+  if(!socket.connected)return;
+  for(const [id,room] of Object.entries(rooms)){
+    const member=room.users.find(u=>u.socketId===socket.id);
+    if(member){member.nickname=nickname;broadcastRoomUpdate(id);}
+  }
   socket.data.deviceFingerprint = deviceFingerprint;
   console.log(`用户连接：${socket.id}，PeerID=${peerId}，昵称=${nickname}，设备ID=${deviceFingerprint}`);
 
@@ -545,7 +567,7 @@ io.on("connection", async (socket) => {
 
   // 管理员操作：清除房间
   socket.on("admin-clear-room", ({ roomId, token, reason }) => {
-    if (!isAdmin || !verifyAdminToken(token)) {
+    if (!isAdmin || !verifyAdminToken(token) || adminTokens.get(token)?.socketId!==socket.id) {
       socket.emit("admin-operation-failed", { message: "管理员权限验证失败" });
       return;
     }
@@ -564,6 +586,9 @@ io.on("connection", async (socket) => {
         createdAt: roomMetadata[roomId]?.createdAt || Date.now()
       };
 
+      // 先保存删除后的目录；磁盘失败时不删除在线房间。
+      const remaining=Object.assign(Object.create(null),rooms);delete remaining[roomId];
+      try{saveRooms(ROOM_REGISTRY_FILE,remaining);}catch{socket.emit('admin-operation-failed',{message:'房间目录保存失败，删除未执行'});return;}
       // 清除房间数据
       delete rooms[roomId];
       delete chatHistory[roomId];
@@ -611,62 +636,6 @@ io.on("connection", async (socket) => {
 
     const logs = adminLogs.slice(-limit || -50).reverse();
     socket.emit("admin-logs-response", { logs });
-  });
-
-  socket.on("createRoom", ({ roomId, password } = {}) => {
-    roomId = String(roomId || "").trim();
-    if (!roomId) return;
-    if (!rooms[roomId]) {
-      rooms[roomId] = { users: [], password: password ? String(password) : null };
-      rooms[roomId].users.push({ socketId: socket.id, peerId, nickname });
-      socket.join(roomId);
-      broadcastRoomList();
-      broadcastRoomUpdate(roomId);
-      systemMessage(roomId, `${nickname} 创建了房间`);
-
-      // 发送聊天历史
-      if (chatHistory[roomId]) {
-        socket.emit("chatHistory", { roomId, messages: chatHistory[roomId] });
-      }
-    } else {
-      socket.emit("theRoomExist", "房间已存在");
-    }
-  });
-
-  socket.on("joinRoom", ({ roomId, password } = {}) => {
-    roomId = String(roomId || "").trim();
-    const room = rooms[roomId];
-    if (!room) { socket.emit("theRoomNotExist", "房间不存在"); return; }
-    if (room.password && room.password !== String(password || "")) {
-      socket.emit("theRoomPasswordWrong", "房间密码错误");
-      return;
-    }
-    room.users.push({ socketId: socket.id, peerId, nickname });
-    socket.join(roomId);
-    systemMessage(roomId, `${nickname} 加入了房间`);
-    broadcastRoomUpdate(roomId);
-
-    // 发送聊天历史
-    if (chatHistory[roomId]) {
-      socket.emit("chatHistory", { roomId, messages: chatHistory[roomId] });
-    }
-  });
-
-  socket.on("leaveRoom", (roomId) => {
-    if (rooms[roomId]) {
-      const before = rooms[roomId].users.length;
-      rooms[roomId].users = rooms[roomId].users.filter((user) => user.socketId !== socket.id);
-      if (rooms[roomId].users.length < before) {
-        socket.leave(roomId);
-        systemMessage(roomId, `${nickname} 离开了房间`);
-      }
-      if (rooms[roomId].users.length === 0) {
-        delete rooms[roomId];
-        broadcastRoomList();
-      } else {
-        broadcastRoomUpdate(roomId);
-      }
-    }
   });
 
   // 聊天消息：服务端转发到房间内所有人并保存历史
@@ -720,17 +689,25 @@ io.on("connection", async (socket) => {
   });
 
   // 字幕消息：AI实时翻译的字幕内容
-  socket.on("subtitleMessage", ({ roomId, originalText, translatedText, sourceLang, targetLang, speaker }) => {
+  let lastSubtitle = {text:'', at:0};
+  socket.on("subtitleMessage", (payload = {}) => {
+    if (!payload || typeof payload !== 'object') return;
+    const {roomId, originalText, translatedText, sourceLang, targetLang} = payload;
+    if(typeof originalText !== 'string' || !originalText.trim() || originalText.length > 1200 || (translatedText && (typeof translatedText !== 'string' || translatedText.length>6000))) return;
+    if(lastSubtitle.text===originalText && Date.now()-lastSubtitle.at<2000) return;
     if (rooms[roomId] && socket.rooms.has(roomId)) {
+      lastSubtitle={text:originalText,at:Date.now()};
       const subtitleMessage = {
+        roomId,
+        senderId:socket.id,
         id: Date.now() + Math.random(),
-        from: speaker || socket.data.nickname,
+        from: socket.data.nickname || '匿名用户',
         deviceFingerprint,
         originalText: originalText,
         translatedText: translatedText || '',
         sourceLang: sourceLang || 'auto',
         targetLang: targetLang || 'en-US',
-        speaker: speaker || socket.data.nickname,
+        speaker: socket.data.nickname || '匿名用户',
         time: Date.now(),
         type: 'subtitle'
       };
@@ -750,7 +727,6 @@ io.on("connection", async (socket) => {
       // 广播字幕消息到房间内所有人
       io.to(roomId).emit("chatMessage", subtitleMessage);
 
-      console.log(`字幕消息已发送到房间 ${roomId}: ${originalText.substring(0, 30)}... -> ${translatedText?.substring(0, 30)}...`);
     }
   });
 
@@ -1189,29 +1165,15 @@ io.on("connection", async (socket) => {
     }
   });
 
-  // 用 disconnecting 而非 disconnect：此时 socket 尚未退出房间，socket.rooms 仍可枚举
-  socket.on("disconnecting", () => {
-    // 只遍历当前 socket 加入过的房间（socket.rooms 含自身私有房间 id，会被过滤掉）
-    socket.rooms.forEach((roomId) => {
-      if (rooms[roomId]) {
-        rooms[roomId].users = rooms[roomId].users.filter((user) => user.socketId !== socket.id);
-        if (rooms[roomId].users.length === 0) {
-          delete rooms[roomId];
-          broadcastRoomList();
-        } else {
-          systemMessage(roomId, `${socket.data.nickname} 离开了房间`);
-          broadcastRoomUpdate(roomId);
-        }
-      }
-    });
-  });
+
 });
 
 // 监听所有网络接口，支持手机访问
-server.listen(3000, '0.0.0.0', () => {
-  console.log("📡 HTTP服务器启动，监听所有网络接口的 3000 端口");
-  console.log("🖥️ 本地访问: http://localhost:3000");
-  console.log("📱 局域网访问: http://YOUR_LOCAL_IP:3000");
-  console.log("🌐 真实域名访问: http://YOUR_DOMAIN:3000");
+const PORT = Number(process.env.PORT || 3000);
+server.listen(PORT, process.env.HOST || '0.0.0.0', () => {
+  console.log(`📡 HTTP服务器启动，监听所有网络接口的 ${PORT} 端口`);
+  console.log(`🖥️ 本地访问: http://localhost:${PORT}`);
+  console.log(`📱 局域网访问: http://YOUR_LOCAL_IP:${PORT}`);
+  console.log(`🌐 正式访问: ${process.env.PUBLIC_URL || 'https://video.shanbo-rig.com'}`);
   console.log("💡 提示: 真实环境建议配置HTTPS以获得完整摄像头权限");
 });

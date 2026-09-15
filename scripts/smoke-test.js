@@ -3,7 +3,7 @@
  * 直接复用 client/js/socket.io.min.js（UMD 包，Node 可加载），避免引入新依赖 */
 const io = require("../client/js/socket.io.min.js");
 
-const URL = "http://localhost:3000";
+const URL = process.env.TEST_URL || `http://localhost:${process.env.PORT || 3000}`;
 let passed = 0, failed = 0;
 function check(name, cond) {
   if (cond) { passed++; console.log(`  ✅ ${name}`); }
@@ -83,7 +83,7 @@ async function main() {
   const fail = await Promise.race([failPromise, wait(2000)]);
   check("错误密码被拒绝", !!fail && !!fail.message);
   const okPromise = new Promise((res) => a.on("admin-login-success", res));
-  a.emit("admin-login", { password: "admin123" });
+  a.emit("admin-login", { password: process.env.ADMIN_PASSWORD || "admin123" });
   const ok = await Promise.race([okPromise, wait(2000)]);
   check("正确密码登录成功且下发令牌/会话", !!ok && !!ok.token && ok.sessionInfo && ok.sessionInfo.duration > 0);
 
