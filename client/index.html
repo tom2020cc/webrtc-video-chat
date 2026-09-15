@@ -6,10 +6,10 @@
     <title>双人音视频通话</title>
     <script src="./js/socket.io.min.js"></script>
     <script src="./js/peerjs.min.js"></script>
-    <script src="./js/subtitles.js?v=20260915-comfort3"></script>
-    <script src="./js/media-ui.js?v=20260915-comfort3"></script>
-    <script src="./js/audio-tools.js?v=20260915-comfort3"></script>
-    <link rel="stylesheet" href="./css/i.css?v=20260915-comfort3">
+    <script src="./js/subtitles.js?v=20260916-voicecheck2"></script>
+    <script src="./js/media-ui.js?v=20260916-voicecheck2"></script>
+    <script src="./js/audio-tools.js?v=20260916-voicecheck2"></script>
+    <link rel="stylesheet" href="./css/i.css?v=20260916-voicecheck2">
 </head>
 <body>
     <!-- 顶栏 -->
@@ -407,7 +407,7 @@
         <label class="field"><span>语速</span><select id="voiceReaderRate"><option value="0.8">慢速 0.8×</option><option value="1">正常 1×</option><option value="1.2">快速 1.2×</option></select></label>
         <label class="field"><span>朗读音量</span><select id="voiceReaderVolume"><option value="0.2">20%</option><option value="0.4">40%</option><option value="0.8">80%</option><option value="1">100%</option></select></label>
       </div>
-      <p id="voiceReaderAvailability"></p><button id="voiceReaderAuto" class="soft-button">自动匹配 / 刷新声音</button>
+      <button id="voiceReaderCheck" class="soft-button">检查本机朗读</button><p id="voiceReaderCapability" role="status"></p><p id="voiceReaderAvailability"></p><button id="voiceReaderAuto" class="soft-button">自动匹配 / 刷新声音</button>
       <details class="voice-extra"><summary>更多声音选项</summary><div class="voice-reader-grid"><label class="field"><span>音调（不改变男女声）</span><select id="voiceReaderPitch"><option value="0.8">低沉 0.8×</option><option value="1">自然 1×</option><option value="1.2">明亮 1.2×</option></select></label><label class="field"><span>连续字幕播放</span><select id="voiceReaderQueue"><option value="latest">优先最新，减少等待</option><option value="ordered">按顺序，最多等待3句</option></select></label></div></details>
       <details class="voice-extra"><summary>字幕显示选项</summary><div class="voice-reader-grid"><label class="field"><span>显示内容</span><select id="captionDisplay"><option value="bilingual">原文 + 译文</option><option value="translation">只看译文</option><option value="hidden">隐藏浮动字幕</option></select></label><label class="field"><span>字幕字号</span><select id="captionSize"><option value="15">紧凑</option><option value="18">标准</option><option value="22">大字</option></select></label><label class="field"><span>对方字幕停留</span><select id="captionDuration"><option value="8">8 秒</option><option value="15">15 秒</option><option value="30">30 秒</option></select></label></div><p>「我的字幕」识别你说的话；接收对方字幕无需开启。隐藏浮动字幕不影响聊天室记录和朗读。</p></details>
       <p>朗读时暂时暂停本机拾音，结束恢复；建议戴耳机。语言与音质取决于设备声音，3秒起声是目标。</p>
@@ -416,9 +416,9 @@
       <details><summary>杂音与网络检测</summary><p>已取消每条字幕的提示音，并请求回声消除、降噪和单声道采集。检测结果只用于当前设备排查。</p><button id="audioDiagnosticsBtn">检测当前通话音频</button><pre id="audioDiagnosticsResult"></pre></details>
     </div></div>
     <aside id="receivedCaption" class="received-caption hidden" role="status" aria-live="polite"><small id="receivedSpeaker"></small><div id="receivedOriginal"></div><div id="receivedTranslated"></div></aside>
-    <script src="./js/i.js?v=20260915-comfort3"></script>
+    <script src="./js/i.js?v=20260916-voicecheck2"></script>
     <script src="./js/mobile-translation.js?v=20260915-mobile2"></script>
-    <script src="./js/voice-reader.js?v=20260915-comfort3"></script>
-    <script src="./js/call-experience.js?v=20260915-comfort3"></script>
+    <script src="./js/voice-reader.js?v=20260916-voicecheck2"></script>
+    <script src="./js/call-experience.js?v=20260916-voicecheck2"></script>
 </body>
 </html>
