@@ -1,6 +1,6 @@
 /* 播放恢复与接收字幕不依赖手机语音识别能力。 */
 (function(){
-  let captionTimer;
+  let captionTimer,captionId=null;
   async function play(video,tile){
     let button=tile.querySelector('.resume-media');
     const show=()=>{if(!button){button=document.createElement('button');button.className='resume-media';tile.appendChild(button);}button.textContent='点击播放画面和声音';button.onclick=async()=>{video.muted=false;try{await video.play();button.remove();button=null;}catch{button.textContent='播放受限，请检查浏览器声音权限后重试';}};};
@@ -8,15 +8,22 @@
     if(!video.muted){video.muted=true;try{await video.play();}catch{}}
     show();
   }
-  function clearCaption(){clearTimeout(captionTimer);const el=document.getElementById('receivedCaption');el?.classList.add('hidden');}
+  function clearCaption(reset=true){if(reset)captionId=null;clearTimeout(captionTimer);const el=document.getElementById('receivedCaption');el?.classList.add('hidden');}
   function receive(data){
     if(!window.currentRoomId||data.roomId!==window.currentRoomId)return;
+    captionId=data.id||null;
     window.VoiceReader?.receive(data);
     const el=document.getElementById('receivedCaption');if(!el)return;
     document.getElementById('receivedSpeaker').textContent=(data.speaker||data.from||'对方')+' · 字幕';
     document.getElementById('receivedOriginal').textContent=data.originalText||'';
     document.getElementById('receivedTranslated').textContent=data.translatedText||'';
-    el.classList.remove('hidden');clearTimeout(captionTimer);captionTimer=setTimeout(clearCaption,12000);
+    el.classList.remove('hidden');clearTimeout(captionTimer);captionTimer=setTimeout(()=>clearCaption(false),(window.CallExperience?.captionDuration()||15)*1000);
   }
-  window.MediaUI={play,receive,clearCaption};
+  function updateTranslation(data){
+    if(!data.id||data.id!==captionId||!window.currentRoomId||data.roomId!==window.currentRoomId)return;
+    document.getElementById('receivedTranslated').textContent=data.translatedText||'';
+    document.getElementById('receivedCaption').classList.remove('hidden');clearTimeout(captionTimer);
+    captionTimer=setTimeout(()=>clearCaption(false),(window.CallExperience?.captionDuration()||15)*1000);
+  }
+  window.MediaUI={play,receive,clearCaption,updateTranslation};
 })();

@@ -2,14 +2,14 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>双人音视频通话</title>
     <script src="./js/socket.io.min.js"></script>
     <script src="./js/peerjs.min.js"></script>
-    <script src="./js/subtitles.js?v=20260915-voice1"></script>
-    <script src="./js/media-ui.js?v=20260915-voice1"></script>
-    <script src="./js/audio-tools.js?v=20260915-voice1"></script>
-    <link rel="stylesheet" href="./css/i.css?v=20260915-voice1">
+    <script src="./js/subtitles.js?v=20260915-comfort3"></script>
+    <script src="./js/media-ui.js?v=20260915-comfort3"></script>
+    <script src="./js/audio-tools.js?v=20260915-comfort3"></script>
+    <link rel="stylesheet" href="./css/i.css?v=20260915-comfort3">
 </head>
 <body>
     <!-- 顶栏 -->
@@ -31,6 +31,7 @@
         <button class="icon-btn" id="settingsBtn" title="环境与设置">⚙️</button>
     </header>
 
+    <nav class="mobile-tabs" aria-label="手机页面"><button id="mobileTabCall" aria-pressed="false">通话</button><button id="mobileTabChat" aria-pressed="false">聊天 <span id="mobileUnread"></span></button><button id="mobileTabLobby" aria-pressed="true">房间大厅</button></nav>
     <!-- 主区域 -->
     <main class="layout">
         <!-- 视频区 -->
@@ -51,6 +52,11 @@
                 </div>
             </div>
 
+<section class="call-hub" aria-label="字幕与朗读快捷控制">
+  <div class="hub-switches"><button id="quickCaptionToggle" aria-pressed="false">📝 开启我的字幕</button><button id="quickVoiceToggle" aria-pressed="false">🔈 开启译文朗读</button><button id="quickVoiceSettings" aria-label="字幕与声音选项">⚙</button></div>
+  <div class="hub-languages"><label>我说 <select id="quickSpeakingLanguage" aria-label="我的说话语言"></select></label><label>我听 <select id="quickVoiceLanguage" aria-label="我听的译文语言"></select></label><button id="quickVoiceReplay" disabled>重播</button></div>
+  <div class="hub-status"><span id="quickVoiceStatus" role="status">对方字幕自动显示，朗读可单独开启</span></div>
+</section>
             <!-- 房间操作 -->
             <div class="room-bar">
                 <p id="connectionStatus" role="status">正在连接 · 每房最多2人</p>
@@ -109,9 +115,11 @@
         <button class="ctrl-btn" id="subtitleBtn" title="AI字幕 (T)"><span class="ico">📝</span><span class="txt">字幕</span></button>
         <button class="ctrl-btn" id="quickTranslationBtn" title="文字及手机输入法语音翻译"><span class="ico">🌐</span><span class="txt">文字翻译</span></button>
         <button class="ctrl-btn" id="voiceReaderBtn" title="选择男女声和语言朗读译文"><span class="ico">🔊</span><span class="txt">译文朗读</span></button>
+        <button class="ctrl-btn mobile-more-btn" id="mobileMoreBtn"><span class="ico">•••</span><span class="txt">更多</span></button>
         <button class="ctrl-btn danger" id="hangupBtn" title="离开房间" disabled><span class="ico">📞</span><span class="txt">离开房间</span></button>
     </footer>
 
+    <div id="mobileToolsModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="通话工具"><div class="modal-box"><div class="modal-head"><h3>通话工具</h3><button class="icon-btn" id="mobileToolsClose" aria-label="关闭通话工具">✕</button></div><div id="mobileToolsGrid" class="mobile-tools-grid"></div></div></div>
     <div id="quickTranslationModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="quickTranslationTitle">
       <div class="modal-box quick-translation-box">
         <div class="modal-head"><h3 id="quickTranslationTitle">文字 / 输入法翻译</h3><button class="icon-btn" id="quickTranslationClose" aria-label="关闭文字翻译">✕</button></div>
@@ -389,24 +397,28 @@
     </div>
 
     <div id="voiceReaderModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="voiceReaderTitle"><div class="modal-box voice-reader-box">
-      <div class="modal-head"><h3 id="voiceReaderTitle">🔊 译文朗读</h3><button id="voiceReaderClose" aria-label="关闭朗读设置">✕</button></div>
+      <div class="modal-head"><h3 id="voiceReaderTitle">字幕与声音</h3><button id="voiceReaderClose" aria-label="关闭朗读设置">✕</button></div>
       <label class="check"><input type="checkbox" id="voiceReaderEnabled"> 自动朗读对方的新字幕</label>
       <div class="voice-reader-grid">
         <label class="field"><span>朗读目标语言</span><select id="voiceReaderLang"><option value="zh-CN">中文</option><option value="en-US">英语</option><option value="ja-JP">日语</option><option value="ko-KR">韩语</option><option value="fr-FR">法语</option><option value="de-DE">德语</option><option value="es-ES">西班牙语</option></select></label>
-        <label class="field"><span>声音类型</span><select id="voiceReaderGender"><option value="female">女声</option><option value="male">男声</option><option value="all">全部声音（可试听）</option></select></label>
+        <label class="field"><span>声音类型</span><select id="voiceReaderGender"><option value="auto">自动匹配（推荐）</option><option value="female">女声</option><option value="male">男声</option><option value="all">全部声音（可试听）</option></select></label>
         <label class="field"><span>声音偏好</span><select id="voiceReaderQuality"><option value="local">低延迟 · 本机音色优先</option><option value="online">在线音色优先 · 依赖网络</option></select></label>
         <label class="field"><span>指定音色</span><select id="voiceReaderVoice"></select></label>
         <label class="field"><span>语速</span><select id="voiceReaderRate"><option value="0.8">慢速 0.8×</option><option value="1">正常 1×</option><option value="1.2">快速 1.2×</option></select></label>
-        <label class="field"><span>朗读音量</span><select id="voiceReaderVolume"><option value="0.4">40%</option><option value="0.8">80%</option><option value="1">100%</option></select></label>
+        <label class="field"><span>朗读音量</span><select id="voiceReaderVolume"><option value="0.2">20%</option><option value="0.4">40%</option><option value="0.8">80%</option><option value="1">100%</option></select></label>
       </div>
-      <p id="voiceReaderAvailability"></p><p>声音由本设备语音库提供；未提供的语言或男女声不会冒充。低延迟以约 3 秒起声为目标，网络和识别耗时可能超出。朗读时暂停本机拾音与语音识别，避免回录循环，结束后恢复。</p>
-      <div class="modal-actions"><button id="voiceReaderPreview">试听所选声音</button><button id="voiceReaderStop">停止并关闭朗读</button></div>
+      <p id="voiceReaderAvailability"></p><button id="voiceReaderAuto" class="soft-button">自动匹配 / 刷新声音</button>
+      <details class="voice-extra"><summary>更多声音选项</summary><div class="voice-reader-grid"><label class="field"><span>音调（不改变男女声）</span><select id="voiceReaderPitch"><option value="0.8">低沉 0.8×</option><option value="1">自然 1×</option><option value="1.2">明亮 1.2×</option></select></label><label class="field"><span>连续字幕播放</span><select id="voiceReaderQueue"><option value="latest">优先最新，减少等待</option><option value="ordered">按顺序，最多等待3句</option></select></label></div></details>
+      <details class="voice-extra"><summary>字幕显示选项</summary><div class="voice-reader-grid"><label class="field"><span>显示内容</span><select id="captionDisplay"><option value="bilingual">原文 + 译文</option><option value="translation">只看译文</option><option value="hidden">隐藏浮动字幕</option></select></label><label class="field"><span>字幕字号</span><select id="captionSize"><option value="15">紧凑</option><option value="18">标准</option><option value="22">大字</option></select></label><label class="field"><span>对方字幕停留</span><select id="captionDuration"><option value="8">8 秒</option><option value="15">15 秒</option><option value="30">30 秒</option></select></label></div><p>「我的字幕」识别你说的话；接收对方字幕无需开启。隐藏浮动字幕不影响聊天室记录和朗读。</p></details>
+      <p>朗读时暂时暂停本机拾音，结束恢复；建议戴耳机。语言与音质取决于设备声音，3秒起声是目标。</p>
+      <div class="modal-actions"><button id="voiceReaderPreview">试听所选声音</button><button id="voiceReaderReplay" disabled>重播上一句</button><button id="voiceReaderStop">仅字幕 · 关闭朗读</button></div>
       <p id="voiceReaderStatus" role="status">朗读默认关闭，请先选择声音并试听</p><p id="voiceReaderTiming"></p><div id="voiceReaderText"></div>
       <details><summary>杂音与网络检测</summary><p>已取消每条字幕的提示音，并请求回声消除、降噪和单声道采集。检测结果只用于当前设备排查。</p><button id="audioDiagnosticsBtn">检测当前通话音频</button><pre id="audioDiagnosticsResult"></pre></details>
     </div></div>
     <aside id="receivedCaption" class="received-caption hidden" role="status" aria-live="polite"><small id="receivedSpeaker"></small><div id="receivedOriginal"></div><div id="receivedTranslated"></div></aside>
-    <script src="./js/i.js?v=20260915-voice1"></script>
+    <script src="./js/i.js?v=20260915-comfort3"></script>
     <script src="./js/mobile-translation.js?v=20260915-mobile2"></script>
-    <script src="./js/voice-reader.js?v=20260915-voice1"></script>
+    <script src="./js/voice-reader.js?v=20260915-comfort3"></script>
+    <script src="./js/call-experience.js?v=20260915-comfort3"></script>
 </body>
 </html>

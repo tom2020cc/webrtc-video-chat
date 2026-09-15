@@ -296,3 +296,9 @@ MIT License
 刷新页面后点击「🔊 译文朗读」，选择语言与系统音色，试听后开启自动朗读。系统声音因设备而异；没有匹配语言或男女声时明确提示。3 秒是目标，不能保证说话到起声的固定延迟。朗读期间暂停本机拾音和识别，防止回录循环。字幕不再触发聊天提示音，可在设置中检测音频网络统计。详见 [线上教程](https://video.shanbo-rig.com/tutorial/#voice)。
 
 验证：`node --test scripts/voice-reader-test.cjs scripts/subtitle-client-test.cjs scripts/media-ui-test.cjs scripts/mobile-translation-test.cjs`。稳定备份标签 `backup/stable-20260915-before-voice`。
+
+### 手机体验与朗读恢复（20260915-comfort3）
+
+手机通话中可一键切换「我的字幕」和「译文朗读」，通过「我说 / 我听」选择语言；「重播」支持只开字幕时回听最后一句。「更多」收纳文件、举手等工具。设置支持字幕内容/字号/停留时间及声音音调/播放顺序。自动匹配支持没有性别名称的系统声音；加载、未起声和翻译失败都有提示，离房后停止并忽略旧回调。
+
+本次28项客户端测试与14项本地回归通过，另有公网真实翻译及朗读事件验收；手机截图是响应式模拟，硬件仍需真机复测。详见 [手机新版教程](https://video.shanbo-rig.com/tutorial/#mobile-experience)。

@@ -2064,6 +2064,7 @@ function toggleSubtitles() {
 }
 
 function syncSubtitleButton() {
+  window.CallExperience?.sync();
   const isRunning = window.Subtitles?.isRunning() || false;
   subtitleBtn.classList.toggle("on", isRunning);
 
