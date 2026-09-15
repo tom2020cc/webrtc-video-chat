@@ -1,11 +1,11 @@
-# 🎥 WebRTC 多人音视频通话系统
+# 🎥 WebRTC 双人音视频通话系统
 
-基于 **Express + Socket.IO + PeerJS** 的多人音视频通话与聊天室系统，支持 **AI 实时字幕翻译** 功能。
+基于 **Express + Socket.IO + PeerJS** 的双人音视频通话与聊天室系统，支持 **AI 实时字幕翻译** 功能。
 
 ## ✨ 核心功能
 
 ### 🎬 视频通话
-- ✅ 多人音视频通话
+- ✅ 每房最多两人，掉线清理在线成员，空房永久保留
 - ✅ 屏幕共享
 - ✅ 摄像头/麦克风控制
 - ✅ 截图功能
@@ -22,7 +22,9 @@
 
 ### 🤖 AI 字幕翻译
 - ✅ 实时语音识别（浏览器内置，免费）
-- ✅ 多语言翻译支持（OpenAI/DeepL/Google/百度）
+- ✅ 服务端 DeepSeek 多语言翻译，密钥只保存在服务器环境变量
+- ✅ 接收对方字幕后按目标语言朗读，可选设备实际提供的男女声、音色、语速、音量
+- ✅ 手机文字/输入法翻译入口，接收字幕不依赖本机语音识别
 - ✅ 字幕历史查看和导出
 - ✅ 字幕样式自定义
 - ✅ 支持SRT/TXT/JSON格式导出
@@ -289,3 +291,8 @@ MIT License
 ---
 
 **🎉 现在就开始体验多人视频通话和AI实时字幕功能吧！**
+## 译文朗读与声音排查
+
+刷新页面后点击「🔊 译文朗读」，选择语言与系统音色，试听后开启自动朗读。系统声音因设备而异；没有匹配语言或男女声时明确提示。3 秒是目标，不能保证说话到起声的固定延迟。朗读期间暂停本机拾音和识别，防止回录循环。字幕不再触发聊天提示音，可在设置中检测音频网络统计。详见 [线上教程](https://video.shanbo-rig.com/tutorial/#voice)。
+
+验证：`node --test scripts/voice-reader-test.cjs scripts/subtitle-client-test.cjs scripts/media-ui-test.cjs scripts/mobile-translation-test.cjs`。稳定备份标签 `backup/stable-20260915-before-voice`。

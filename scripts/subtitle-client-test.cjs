@@ -10,6 +10,7 @@ function setup(){
  const manager=window.Subtitles.init();manager.start();return {window,manager,requests,sent,elements,timers};
 }
 const settle=()=>new Promise(r=>setImmediate(r));
+test('voice playback suppresses recognition results and resumes only once',()=>{const t=setup(),old=t.manager.engine;t.manager.setPlaybackSuppressed(true);old.onresult({resultIndex:0,results:[Object.assign([{transcript:'回录朗读'}],{isFinal:true})]});assert.equal(t.requests.length,0);t.manager.setPlaybackSuppressed(false);const resumed=t.manager.engine;assert.notEqual(resumed,old);t.manager.setPlaybackSuppressed(false);assert.equal(t.manager.engine,resumed);t.manager.stop();});
 test('recognition restarts after end and processes all final results once',async()=>{
  const t=setup();const e=t.manager.engine;e.onend();t.timers.shift()();assert.equal(e.starts,2);
  const results=[Object.assign([{transcript:'你好'}],{isFinal:true}),Object.assign([{transcript:'再见'}],{isFinal:true})];

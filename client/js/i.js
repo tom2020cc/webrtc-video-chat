@@ -305,6 +305,27 @@ function getVolume(key) {
   return Math.sqrt(sum / buf.length);
 }
 
+let guardedAudioStream=null;
+window.VoiceAudioGuard=active=>{
+  if(active){guardedAudioStream=localStream;localStream?.getAudioTracks().forEach(t=>t.enabled=false);}
+  else{if(guardedAudioStream&&guardedAudioStream===localStream)localStream.getAudioTracks().forEach(t=>{if(t.readyState==='live')t.enabled=!isMuted;});guardedAudioStream=null;}
+  window.Subtitles?.setPlaybackSuppressed(active);
+};
+window.getAudioDiagnostics=async()=>{
+  const room=currentRoomId;if(!room)return '请先加入房间并与对方建立通话';
+  const pcs=[...calls.values()].map(c=>c.peerConnection).filter(Boolean);
+  if(!pcs.length)return '尚无对方音频连接，暂时没有网络采样数据';
+  const before=await Promise.all(pcs.map(async pc=>window.AudioTools.summarize(await pc.getStats())));
+  await new Promise(resolve=>setTimeout(resolve,2000));
+  if(currentRoomId!==room)return '已离开房间，检测取消';
+  const after=await Promise.all(pcs.map(async pc=>window.AudioTools.summarize(await pc.getStats())));
+  const lines=after.map((value,i)=>{const old=before[i],received=Math.max(0,value.received-old.received),lost=Math.max(0,value.lost-old.lost);if(!received&&!lost)return '没有收到可统计的音频包';const ratio=100*lost/(received+lost);return `音频丢包 ${ratio.toFixed(1)}% · 抖动 ${value.jitter.toFixed(0)}ms · 往返 ${value.rtt.toFixed(0)}ms\n${ratio>3||value.jitter>40?'检测到网络波动，可能造成断续/爆音；尝试关闭代理或切换网络':'当前样本未显示明显丢包；若有回声或啸叫，请戴耳机并拉开两台设备距离'}`;});
+  const settings=localStream?.getAudioTracks()[0]?.getSettings()||{};
+  const flag=v=>v===true?'已启用':v===false?'未启用':'设备未报告';
+  lines.push(`回声消除：${flag(settings.echoCancellation)}；降噪：${flag(settings.noiseSuppression)}；自动增益：${flag(settings.autoGainControl)}`);
+  return lines.join('\n');
+};
+
 function setSpeaking(tileId, speaking) {
   const tile = document.getElementById(tileId);
   if (tile) tile.classList.toggle("speaking", speaking);
@@ -585,7 +606,7 @@ socket.on("chatMessage", (data) => {
     appendMessage(from, text, time, false, id, replyTo, forwardFrom, type);
   }
 
-  if (from !== config.nickname) playTone(880, 0.08, "sine", 0.07);
+  if (window.AudioTools.shouldNotify(type,from,config.nickname)) playTone(880, 0.08, "sine", 0.07);
 });
 socket.on("systemMessage", ({ text, time }) => {
   appendMessage(null, text, time, true);
@@ -654,7 +675,7 @@ async function initLocalStream() {
     syncControlButtons(); initSubtitleModule(); return;
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio:window.AudioTools.constraints() });
     if(requestVersion!==roomRequestVersion||!socket.connected){stream.getTracks().forEach(t=>t.stop());return;}
     localStream = stream;
     if (config.micOn === false && localStream.getAudioTracks()[0]) {
@@ -1110,6 +1131,7 @@ function leaveRoom(notifyServer=true) {
   const leavingRoom=currentRoomId||pendingRoomRequest?.roomId;
   roomRequestVersion++;pendingRoomRequest=null;createRoomBtn.disabled=false;
   window.Subtitles?.stop();
+  window.VoiceReader?.stop();
   window.MediaUI?.clearCaption();
   if(notifyServer&&socket.connected&&leavingRoom)socket.volatile.emit('leaveRoom',leavingRoom);
   currentRoomId = null;
@@ -1178,6 +1200,7 @@ function syncControlButtons() {
 }
 
 function toggleMute() {
+  if(window.VoiceReader?.isSpeaking()){showNotice('朗读期间麦克风暂停，停止朗读后可切换静音');return;}
   if (!localStream) {showNotice('当前为旁观模式，请在设置中开启麦克风，保存后刷新并重新加入房间');return;}
   const track = localStream.getAudioTracks()[0];
   if (!track) return;

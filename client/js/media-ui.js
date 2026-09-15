@@ -11,6 +11,7 @@
   function clearCaption(){clearTimeout(captionTimer);const el=document.getElementById('receivedCaption');el?.classList.add('hidden');}
   function receive(data){
     if(!window.currentRoomId||data.roomId!==window.currentRoomId)return;
+    window.VoiceReader?.receive(data);
     const el=document.getElementById('receivedCaption');if(!el)return;
     document.getElementById('receivedSpeaker').textContent=(data.speaker||data.from||'对方')+' · 字幕';
     document.getElementById('receivedOriginal').textContent=data.originalText||'';

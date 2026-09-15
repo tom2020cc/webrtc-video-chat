@@ -47,6 +47,7 @@
     syncButton(){if(typeof syncSubtitleButton==='function')syncSubtitleButton();}
     notice(text){if(typeof showNotice==='function')showNotice(text);}
     start() {
+      if(window.VoiceReader?.isSpeaking()){this.notice('朗读期间暂停识别，朗读结束后再开启');return false;}
       if(this.isActive)return true;
       if(!window.currentRoomId || !window.socket?.connected){this.notice('请先加入房间再开启字幕');return false;}
       const Engine=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -64,7 +65,7 @@
       return this.isActive;
     }
     checkRecognitionHealth(){
-      if(!this.isActive)return;
+      if(!this.isActive||this.playbackSuppressed)return;
       const elapsed=Date.now()-this.lastRecognitionAt;
       if(elapsed>=45000){
         this.stop();
@@ -79,7 +80,7 @@
       engine.onaudiostart=()=>{if(this.isActive&&this.engine===engine){this.audioStarted=true;this.status('麦克风已启动，等待语音识别结果…');}};
       engine.onspeechstart=()=>{if(this.isActive&&this.engine===engine){this.speechDetected=true;this.status('检测到语音，正在等待识别文字…');}};
       engine.onresult=event=>{
-        if(!this.isActive||this.engine!==engine)return;
+        if(!this.isActive||this.playbackSuppressed||this.engine!==engine)return;
         this.networkFailures=0;this.lastRecognitionAt=Date.now();let interim='';
         for(let i=event.resultIndex;i<event.results.length;i++){
           const r=event.results[i];
@@ -88,7 +89,7 @@
         if(interim)this.showInterimSubtitle(interim);
       };
       engine.onerror=event=>{
-        if(!this.isActive||this.engine!==engine)return;
+        if(!this.isActive||this.playbackSuppressed||this.engine!==engine)return;
         if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(event.error)){
           const reason={'not-allowed':'麦克风权限被拒绝','service-not-allowed':'浏览器不允许使用识别服务','audio-capture':'麦克风设备不可用','language-not-supported':'浏览器不支持所选识别语言'}[event.error];
           this.stop();this.status(reason+'。可检查手机权限或使用「文字 / 输入法翻译」。',true);
@@ -99,17 +100,26 @@
         }
       };
       engine.onend=()=>{
-        if(!this.isActive||this.engine!==engine)return;
+        if(!this.isActive||this.playbackSuppressed||this.engine!==engine)return;
         clearTimeout(this.restartTimer);
         this.restartTimer=setTimeout(()=>{
-          if(!this.isActive||this.engine!==engine)return;
+          if(!this.isActive||this.playbackSuppressed||this.engine!==engine)return;
           engine.lang=language(window.config?.sourceLang);
           try{engine.start();}catch{this.stop();this.notice('识别重连失败，请关闭后重开字幕');}
         },this.networkFailures?Math.min(1000*2**this.networkFailures,15000):300);
       };
       try{engine.start();}catch{this.stop();this.notice('语音识别启动失败，请检查浏览器权限');}
     }
+    setPlaybackSuppressed(value){
+      if(Boolean(this.playbackSuppressed)===value)return;
+      this.playbackSuppressed=value;
+      if(!this.isActive)return;
+      clearTimeout(this.restartTimer);
+      if(value){try{this.engine?.abort();}catch{}this.status('正在朗读译文，本机识别暂时暂停以避免回录');}
+      else{this.lastRecognitionAt=Date.now();this.createRecognition(window.SpeechRecognition||window.webkitSpeechRecognition);this.status('朗读结束，语音识别已恢复');}
+    }
     stop() {
+      this.playbackSuppressed=false;
       this.isActive=false;this.session++;this.visual++;this.queue=[];
       clearInterval(this.roomWatch);clearTimeout(this.restartTimer);clearTimeout(this.clearTimer);
       if(this.engine){this.engine.onend=null;this.engine.onresult=null;this.engine.onerror=null;this.engine.onaudiostart=null;this.engine.onspeechstart=null;try{this.engine.abort();}catch{}}
@@ -166,6 +176,7 @@
     init(){if(!this.manager){this.manager=new SubtitleManager();this.manager.init();}return this.manager;},
     start(){return this.init().start();},stop(){this.manager?.stop();},isRunning(){return this.manager?.isRunning()||false;},
     updateLanguage(sourceLang){this.manager?.updateLanguage(sourceLang);},translateText:translate,
+    setPlaybackSuppressed(value){this.manager?.setPlaybackSuppressed(value);},
     status:()=>request('translationStatus',undefined,5000)
   };
 })();
