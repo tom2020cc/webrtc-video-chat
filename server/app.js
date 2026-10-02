@@ -10,6 +10,7 @@ const crypto = require("crypto");
 const {createTranslator, attachTranslation} = require('./translation');
 const translator = createTranslator();
 const {attachRooms} = require('./rooms');
+const {attachClientChecks}=require('./client-checks');
 const {loadRooms,saveRooms}=require('./room-store');
 
 // 管理员配置
@@ -407,6 +408,7 @@ function broadcastRoomUpdate(roomId) {
 function systemMessage(roomId, text) { io.to(roomId).emit("systemMessage", { text, time: Date.now() }); }
 
 io.on("connection", async (socket) => {
+  attachClientChecks(socket,{rooms,io});
   attachTranslation(socket, {translator, isMember: roomId => Boolean(rooms[roomId] && socket.rooms.has(roomId))});
   // 获取客户端信息
   const clientInfo = socket.handshake.auth || {};

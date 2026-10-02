@@ -6,10 +6,10 @@
     <title>双人音视频通话</title>
     <script src="./js/socket.io.min.js"></script>
     <script src="./js/peerjs.min.js"></script>
-    <script src="./js/subtitles.js?v=20260916-voicecheck2"></script>
-    <script src="./js/media-ui.js?v=20260916-voicecheck2"></script>
-    <script src="./js/audio-tools.js?v=20260916-voicecheck2"></script>
-    <link rel="stylesheet" href="./css/i.css?v=20260916-voicecheck2">
+    <script src="./js/subtitles.js?v=20261002-checks1"></script>
+    <script src="./js/media-ui.js?v=20261002-checks1"></script>
+    <script src="./js/audio-tools.js?v=20261002-checks1"></script>
+    <link rel="stylesheet" href="./css/i.css?v=20261002-checks1">
 </head>
 <body>
     <!-- 顶栏 -->
@@ -31,6 +31,21 @@
         <button class="icon-btn" id="settingsBtn" title="环境与设置">⚙️</button>
     </header>
 
+    <button id="clientChecksOpen" class="client-checks-summary" type="button">● 互译检测 · 正在检查</button>
+    <div id="clientChecksModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="clientChecksTitle">
+      <div class="modal-box checks-box">
+        <div class="modal-head"><h3 id="clientChecksTitle">双方互译检测</h3><button id="clientChecksClose" class="icon-btn" aria-label="关闭互译检测">✕</button></div>
+        <p class="checks-help">绿灯：已验证；红灯：条件缺失或失败；灰灯：待实测。双方只共享检测灯状态，不共享检测文字。实测记录 2 分钟后过期。</p>
+        <div class="checks-actions"><button id="checksRun">检测翻译服务</button><button id="checksRecognize">开启字幕并说一句</button><button id="checksVoice">声音设置</button><button id="checksPreview">试听当前语言</button></div>
+        <div id="checksOutput" role="status"></div>
+        <div class="checks-head"><b>检测项目 / 本机结果</b><b>本机</b><b>对方</b></div>
+        <div id="checksRows"></div>
+        <p id="checksPeer" class="checks-help"></p>
+        <div class="checks-actions"><button id="checksHeard" disabled>我已听到试听声音</button><button id="checksSilent">没有听到声音</button></div>
+        <p class="checks-help">测试顺序：双方加入同一房间 → 检测翻译 → 各自开启字幕并说话 → 开启译文朗读、试听并确认。视频正常不等于互译正常；请让对方也完成检测。</p>
+        <a href="/tutorial/#client-checks" target="_blank" rel="noopener">查看检测教程与红灯处理</a>
+      </div>
+    </div>
     <nav class="mobile-tabs" aria-label="手机页面"><button id="mobileTabCall" aria-pressed="false">通话</button><button id="mobileTabChat" aria-pressed="false">聊天 <span id="mobileUnread"></span></button><button id="mobileTabLobby" aria-pressed="true">房间大厅</button></nav>
     <!-- 主区域 -->
     <main class="layout">
@@ -416,9 +431,10 @@
       <details><summary>杂音与网络检测</summary><p>已取消每条字幕的提示音，并请求回声消除、降噪和单声道采集。检测结果只用于当前设备排查。</p><button id="audioDiagnosticsBtn">检测当前通话音频</button><pre id="audioDiagnosticsResult"></pre></details>
     </div></div>
     <aside id="receivedCaption" class="received-caption hidden" role="status" aria-live="polite"><small id="receivedSpeaker"></small><div id="receivedOriginal"></div><div id="receivedTranslated"></div></aside>
-    <script src="./js/i.js?v=20260916-voicecheck2"></script>
+    <script src="./js/i.js?v=20261002-checks1"></script>
     <script src="./js/mobile-translation.js?v=20260915-mobile2"></script>
-    <script src="./js/voice-reader.js?v=20260916-voicecheck2"></script>
-    <script src="./js/call-experience.js?v=20260916-voicecheck2"></script>
+    <script src="./js/voice-reader.js?v=20261002-checks1"></script>
+    <script src="./js/client-checks.js?v=20261002-checks1"></script>
+    <script src="./js/call-experience.js?v=20261002-checks1"></script>
 </body>
 </html>

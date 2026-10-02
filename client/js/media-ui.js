@@ -17,6 +17,7 @@
     document.getElementById('receivedSpeaker').textContent=(data.speaker||data.from||'对方')+' · 字幕';
     document.getElementById('receivedOriginal').textContent=data.originalText||'';
     document.getElementById('receivedTranslated').textContent=data.translatedText||'';
+    window.ClientChecks?.received(data);
     el.classList.remove('hidden');clearTimeout(captionTimer);captionTimer=setTimeout(()=>clearCaption(false),(window.CallExperience?.captionDuration()||15)*1000);
   }
   function updateTranslation(data){

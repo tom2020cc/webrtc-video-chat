@@ -90,6 +90,7 @@
       };
       engine.onerror=event=>{
         if(!this.isActive||this.playbackSuppressed||this.engine!==engine)return;
+        window.ClientChecks?.record('recognition','fail','语音识别错误：'+event.error);
         if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(event.error)){
           const reason={'not-allowed':'麦克风权限被拒绝','service-not-allowed':'浏览器不允许使用识别服务','audio-capture':'麦克风设备不可用','language-not-supported':'浏览器不支持所选识别语言'}[event.error];
           this.stop();this.status(reason+'。可检查手机权限或使用「文字 / 输入法翻译」。',true);
@@ -137,6 +138,7 @@
       text=String(text||'').trim();
       if(!text||!this.isActive||this.room!==window.currentRoomId)return;
       if(this.lastFinal.text===text&&Date.now()-this.lastFinal.at<2000)return;
+      window.ClientChecks?.record('recognition','pass','已收到本机语音识别文字');
       this.lastFinal={text,at:Date.now()};clearTimeout(this.clearTimer);
       const visual=++this.visual;this.showOriginalSubtitle(text);this.showTranslatedSubtitle('');
       // 最终结果串行翻译；临时结果仅在本机显示，避免逐字计费。

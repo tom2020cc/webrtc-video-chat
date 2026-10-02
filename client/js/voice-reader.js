@@ -46,10 +46,10 @@
   let finished=false,started=false,startTimer,endTimer;
   const current=()=>!finished&&active===record&&run===epoch&&(!job||valid(job));
   record.finish=(ok=false)=>{if(finished)return;finished=true;clearTimeout(startTimer);clearTimeout(endTimer);if(active===record){window.VoiceAudioGuard?.(false);active=null;}resolve(ok);};
-  const fail=message=>{if(!current())return;record.finish();synth.cancel();status(message);};
+  const fail=message=>{if(!current())return;window.ClientChecks?.record('playback','fail',message);record.finish();synth.cancel();status(message);};
   startTimer=setTimeout(()=>fail('声音没有启动，请点「重播上一句」或试听；也可换成本机音色'),5000);
   u.onstart=()=>{if(!current())return;started=true;clearTimeout(startTimer);window.VoiceAudioGuard?.(true);if(job&&!job.started){job.started=true;put('voiceReaderTiming',`收到字幕 → 起声 ${((performance.now()-job.at)/1000).toFixed(1)} 秒（不含发送方识别与翻译）`);}status(job?'正在朗读译文…':'正在试听…');endTimer=setTimeout(()=>fail('朗读中断，请点重播或切换音色'),Math.min(60000,Math.max(20000,text.length*550/prefs.rate)));};
-  u.onend=()=>{if(!current())return;if(!started){fail('声音未确认启动，请点击试听或重播');return;}record.finish(true);status('朗读完成，等待下一句');};
+  u.onend=()=>{if(!current())return;if(!started){fail('声音未确认启动，请点击试听或重播');return;}record.finish(true);window.ClientChecks?.playbackFinished();status('朗读完成，等待下一句');};
   u.onerror=e=>{if(!current())return;fail(e.error==='not-allowed'?'声音被浏览器拦截，请点「重播上一句」或试听':`朗读失败（${e.error||'未知'}），请试听或换音色`);};
   try{synth.resume();synth.speak(u);}catch{fail('无法启动声音，请换浏览器或检查系统语音包');}
  });}
@@ -95,7 +95,7 @@
  $('audioDiagnosticsBtn').onclick=async()=>{put('audioDiagnosticsResult','正在采样音频网络（约2秒）…');try{put('audioDiagnosticsResult',await window.getAudioDiagnostics());}catch{put('audioDiagnosticsResult','暂时无法读取，请先建立通话');}};
  function loadVoices(){refreshVoices();if(!voiceList().length&&voicePolls++<8)setTimeout(loadVoices,500);}
  if(supported){synth.addEventListener('voiceschanged',refreshVoices);loadVoices();}else{status(unsupported);$('voiceReaderEnabled').disabled=true;$('voiceReaderPreview').disabled=true;}
- window.VoiceReader={receive,stop,interruptForSpeech:()=>{cancel();status("已暂停本句朗读，可以开始说话");},isSpeaking:()=>Boolean(active),matchingVoices,isEnabled:()=>enabled,setEnabled,replay,open,setLanguage:lang=>{if(languages[lang]){setPreference('lang',lang);$('voiceReaderLang').value=lang;}},chunks};
+ window.VoiceReader={health:()=>({supported,enabled,lang:prefs.lang,count:matchingVoices().length,key:JSON.stringify(prefs)}),preview,receive,stop,interruptForSpeech:()=>{cancel();status("已暂停本句朗读，可以开始说话");},isSpeaking:()=>Boolean(active),matchingVoices,isEnabled:()=>enabled,setEnabled,replay,open,setLanguage:lang=>{if(languages[lang]){setPreference('lang',lang);$('voiceReaderLang').value=lang;}},chunks};
  window.addEventListener('pagehide',stop);
  document.addEventListener('visibilitychange',()=>{if(document.hidden&&enabled){cancel();status('页面在后台，暂停朗读；回到页面后接收新字幕');}else if(enabled){synth?.resume();refreshVoices();status('已返回通话，等待新字幕；没声音可点重播');}});
  sync();

@@ -311,6 +311,12 @@ window.VoiceAudioGuard=active=>{
   else{if(guardedAudioStream&&guardedAudioStream===localStream)localStream.getAudioTracks().forEach(t=>{if(t.readyState==='live')t.enabled=!isMuted;});guardedAudioStream=null;}
   window.Subtitles?.setPlaybackSuppressed(active);
 };
+window.getClientMediaState=()=>({
+  microphone:localStream?.getAudioTracks().some(t=>t.readyState==='live'&&!t.muted&&(t.enabled||Boolean(guardedAudioStream)))||false,
+  muted:isMuted,
+  peers:currentUsers.filter(u=>u.socketId!==socket.id).map(u=>u.socketId),
+  media:[...calls.values()].some(c=>c.peerConnection?.connectionState==='connected')
+});
 window.getAudioDiagnostics=async()=>{
   const room=currentRoomId;if(!room)return '请先加入房间并与对方建立通话';
   const pcs=[...calls.values()].map(c=>c.peerConnection).filter(Boolean);
